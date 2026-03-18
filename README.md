@@ -41,7 +41,7 @@
 ### 在线安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ForLoveIcu/mihomo-for-linux-install/main/quick_install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ForLoveIcu/mihomo-for-linux-install/master/quick_install.sh | bash
 ```
 
 ### 离线安装
