@@ -373,10 +373,11 @@ main() {
     fi
 
     echo
-    log_success "安装完成：$MIHOMO_DIR"
-    echo "配置文件：$MIHOMO_DIR/config.yaml"
-    echo "服务管理：clashon、clashoff、clash_restart、clash_status、clash_select"
-    echo "请执行 source ~/.bashrc 后直接使用上述命令"
+    log_success "安装完成：$MIHOMO_DIR \n"
+    log_info "配置文件：$MIHOMO_DIR/config.yaml"
+    log_info "服务管理：clashon、clashoff、clash_restart、clash_status、clash_select"
+    log_info "请执行 source ~/.bashrc 后直接使用上述命令"
+    log_info "使用 curl -I https://www.google.com 来验证是否成功\n"
 }
 
 main "$@"
