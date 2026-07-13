@@ -299,6 +299,17 @@ EOF
     log_success "已创建命令：clashon、clashoff、clash_restart、clash_status"
 }
 
+configure_command_path() {
+    local bashrc_file="$HOME/.bashrc"
+    local path_line='export PATH="$HOME/.local/bin:$PATH"'
+
+    touch "$bashrc_file"
+    if ! grep -Fqx "$path_line" "$bashrc_file"; then
+        printf '\n# Mihomo user commands\n%s\n' "$path_line" >> "$bashrc_file"
+        log_success "已将 ~/.local/bin 添加到 $bashrc_file"
+    fi
+}
+
 main() {
     local choice
 
@@ -344,11 +355,13 @@ main() {
         return 1
     fi
     create_service_commands
+    configure_command_path
 
     echo
     log_success "安装完成：$MIHOMO_DIR"
     echo "配置文件：$MIHOMO_DIR/config.yaml"
     echo "服务管理：clashon、clashoff、clash_restart、clash_status"
+    echo "请执行 source ~/.bashrc 后直接使用上述命令"
 }
 
 main "$@"

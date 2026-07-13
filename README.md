@@ -78,10 +78,11 @@ clash_restart       # 重启 Mihomo
 clash_status        # 查看 Mihomo 状态
 ```
 
-上述命令位于 `~/.local/bin`。若提示找不到命令，将该目录加入当前 shell 的 PATH：
+安装脚本会自动将 `~/.local/bin` 写入 `~/.bashrc`。当前终端请执行以下命令后再直接使用上述命令：
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
+source ~/.bashrc
 ```
 
 ### 重新登录后启动
