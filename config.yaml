@@ -7,6 +7,9 @@ mode: rule
 log-level: info
 external-controller: 127.0.0.1:9090
 
+profile:
+  store-selected: true
+
 dns:
   enable: true
   # 普通用户不能绑定 1024 以下端口；如需 53 端口，请由管理员另行配置。

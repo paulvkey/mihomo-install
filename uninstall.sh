@@ -33,7 +33,7 @@ if [[ -f "$SERVICE_FILE" ]]; then
 fi
 systemctl --user daemon-reload 2>/dev/null || true
 
-for command in clashon clashoff clash_restart clash_status; do
+for command in clashon clashoff clash_restart clash_status clash_select; do
     command_file="$COMMAND_DIR/$command"
     if [[ -f "$command_file" ]] && grep -q '^# Managed by mihomo-install$' "$command_file"; then
         rm -f "$command_file"

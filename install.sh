@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.yaml"
 COUNTRY_FILE="$SCRIPT_DIR/Country.mmdb"
+SELECT_SCRIPT="$SCRIPT_DIR/clash_select.sh"
 SERVICE_DIR="$HOME/.config/systemd/user"
 SERVICE_FILE="$SERVICE_DIR/mihomo.service"
 COMMAND_DIR="$HOME/.local/bin"
@@ -261,6 +262,10 @@ create_service_commands() {
 # Managed by mihomo-install
 if systemctl --user start mihomo && systemctl --user is-active --quiet mihomo; then
     echo "Mihomo 已启动"
+    if [[ -t 0 && -x "$HOME/.local/bin/clash_select" ]]; then
+        "$HOME/.local/bin/clash_select" || echo "节点选择未完成，可稍后执行 clash_select。" >&2
+    fi
+    exit 0
 else
     echo "Mihomo 启动失败，请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
     exit 1
@@ -295,8 +300,13 @@ EOF
 exec systemctl --user status mihomo --no-pager
 EOF
 
-    chmod 755 "$COMMAND_DIR/clashon" "$COMMAND_DIR/clashoff" "$COMMAND_DIR/clash_restart" "$COMMAND_DIR/clash_status"
-    log_success "已创建命令：clashon、clashoff、clash_restart、clash_status"
+    if [[ ! -f "$SELECT_SCRIPT" ]]; then
+        log_error "未找到节点选择脚本：$SELECT_SCRIPT"
+        return 1
+    fi
+    cp "$SELECT_SCRIPT" "$COMMAND_DIR/clash_select"
+    chmod 755 "$COMMAND_DIR/clashon" "$COMMAND_DIR/clashoff" "$COMMAND_DIR/clash_restart" "$COMMAND_DIR/clash_status" "$COMMAND_DIR/clash_select"
+    log_success "已创建命令：clashon、clashoff、clash_restart、clash_status、clash_select"
 }
 
 configure_command_path() {
@@ -354,13 +364,18 @@ main() {
         log_error "安装未完成：核心文件已写入 $MIHOMO_DIR，但 mihomo 服务未成功启动"
         return 1
     fi
-    create_service_commands
+    if ! create_service_commands; then
+        return 1
+    fi
     configure_command_path
+    if [[ -t 0 ]]; then
+        "$COMMAND_DIR/clash_select" || log_warn "首次节点选择未完成，稍后可执行 clash_select"
+    fi
 
     echo
     log_success "安装完成：$MIHOMO_DIR"
     echo "配置文件：$MIHOMO_DIR/config.yaml"
-    echo "服务管理：clashon、clashoff、clash_restart、clash_status"
+    echo "服务管理：clashon、clashoff、clash_restart、clash_status、clash_select"
     echo "请执行 source ~/.bashrc 后直接使用上述命令"
 }
 

@@ -12,6 +12,7 @@
 6. 代理、控制接口和 DNS 仅监听 `127.0.0.1`，不会向局域网设备开放。
 7. 每次安装会在 `20000-59999` 范围内为 HTTP、SOCKS、控制接口和 DNS 分配不同的可用随机端口。
 8. 服务因端口绑定失败时，自动重新分配端口并重试，最多 3 次；仍失败时终止安装并显示日志诊断命令。
+9. 安装完成后会交互选择订阅节点；之后每次在交互终端执行 `clashon` 也会再次进入节点选择。
 
 ## 使用
 
@@ -76,6 +77,7 @@ clashon             # 启动 Mihomo
 clashoff            # 停止 Mihomo
 clash_restart       # 重启 Mihomo
 clash_status        # 查看 Mihomo 状态
+clash_select        # 交互选择订阅节点
 ```
 
 安装脚本会自动将 `~/.local/bin` 写入 `~/.bashrc`。当前终端请执行以下命令后再直接使用上述命令：
@@ -84,6 +86,8 @@ clash_status        # 查看 Mihomo 状态
 export PATH="$HOME/.local/bin:$PATH"
 source ~/.bashrc
 ```
+
+节点选择依赖 `jq`。无 sudo 权限时，请联系管理员安装 `jq`；也可手动通过 Mihomo 控制 API 选择节点。
 
 ### 重新登录后启动
 
