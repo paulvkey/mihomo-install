@@ -1,405 +1,354 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Mihomo Linux 安装脚本 v2.0.0 - 重构版
-# 支持多架构、智能下载、完善错误处理
+# Mihomo 安装脚本
+set -euo pipefail
 
-set -e
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/config.yaml"
+COUNTRY_FILE="$SCRIPT_DIR/Country.mmdb"
+SERVICE_DIR="$HOME/.config/systemd/user"
+SERVICE_FILE="$SERVICE_DIR/mihomo.service"
+COMMAND_DIR="$HOME/.local/bin"
 
-# 设置变量
-MihomoDir="/etc/mihomo"
-ConfigFile="config.yaml"
-CountryFile="Country.mmdb"
+# 镜像地址为 GitHub URL 前缀；最后的空字符串表示 GitHub 原始地址。
+GITHUB_MIRRORS=(
+    "https://ghfast.top/"
+    "https://gh-proxy.com/"
+    "https://ghproxy.net/"
+    "https://mirror.ghproxy.com/"
+    ""
+)
 
-# 加载资源配置
-load_config() {
-    # 尝试加载 resources.conf 配置文件
-    if [ -f "resources.conf" ]; then
-        source resources.conf
-        log_info "已加载 resources.conf 配置文件"
-    else
-        # 内置备用配置
-        log_warn "未找到 resources.conf，使用内置配置"
-        ARCH_x86_64_MIHOMO="mihomo-linux-amd64-compatible-v1.19.12.gz"
-        ARCH_aarch64_MIHOMO="mihomo-linux-arm64-v1.19.12.gz"
-        ARCH_arm64_MIHOMO="mihomo-linux-arm64-v1.19.12.gz"
-        ARCH_armv7l_MIHOMO="mihomo-linux-armv7-v1.19.12.gz"
-        BUILTIN_WEBUI="metacubexd.tgz"
-    fi
-}
-
-# 检测系统架构并返回对应的文件名
-detect_arch_file() {
-    local arch=$(uname -m)
-
-    case $arch in
-        x86_64)
-            echo "${ARCH_x86_64_MIHOMO:-mihomo-linux-amd64-compatible-v1.19.12.gz}"
-            ;;
-        aarch64)
-            echo "${ARCH_aarch64_MIHOMO:-mihomo-linux-arm64-v1.19.12.gz}"
-            ;;
-        arm64)
-            echo "${ARCH_arm64_MIHOMO:-mihomo-linux-arm64-v1.19.12.gz}"
-            ;;
-        armv7l)
-            echo "${ARCH_armv7l_MIHOMO:-mihomo-linux-armv7-v1.19.12.gz}"
-            ;;
-        *)
-            log_error "不支持的架构: $arch"
-            log_error "支持的架构: x86_64, aarch64, arm64, armv7l"
-            exit 1
-            ;;
-    esac
-}
-
-# 检查文件是否为有效的二进制文件（非占位文件）
-is_valid_file() {
-    local filepath=$1
-    local min_size=${MIN_FILE_SIZE:-1000}
-    if [ ! -f "$filepath" ]; then
-        return 1
-    fi
-    local filesize=$(stat -c%s "$filepath" 2>/dev/null || stat -f%z "$filepath" 2>/dev/null || echo 0)
-    if [ "$filesize" -lt "$min_size" ]; then
-        return 1
-    fi
-    return 0
-}
-
-# 从 GitHub 下载文件（支持镜像加速）
-download_file() {
-    local url=$1
-    local output=$2
-    local description=$3
-
-    log_info "正在下载 ${description:-$url}..."
-
-    # 尝试镜像列表
-    local mirror_urls=()
-    if [ ${#MIRRORS[@]} -gt 0 ]; then
-        for mirror in "${MIRRORS[@]}"; do
-            if [ -n "$mirror" ]; then
-                mirror_urls+=("${mirror}${url}")
-            fi
-        done
-    fi
-    # 原始地址作为最后备选
-    mirror_urls+=("$url")
-
-    for try_url in "${mirror_urls[@]}"; do
-        log_info "尝试下载: $try_url"
-        if curl -fSL --connect-timeout "${CONNECT_TIMEOUT:-8}" --max-time "${DOWNLOAD_TIMEOUT:-120}" -o "$output" "$try_url" 2>/dev/null; then
-            if is_valid_file "$output"; then
-                log_success "下载成功: $output"
-                return 0
-            else
-                log_warn "下载的文件无效，尝试下一个镜像..."
-                rm -f "$output"
-            fi
-        fi
-    done
-
-    # 也尝试 wget
-    log_info "curl 下载失败，尝试 wget..."
-    if command -v wget &>/dev/null; then
-        if wget -q --timeout="${DOWNLOAD_TIMEOUT:-120}" -O "$output" "$url" 2>/dev/null; then
-            if is_valid_file "$output"; then
-                log_success "wget 下载成功: $output"
-                return 0
-            fi
-            rm -f "$output"
-        fi
-    fi
-
-    log_error "下载失败: $description"
-    return 1
-}
-
-# 查找文件（支持多个可能的路径）
-find_file() {
-    local filename=$1
-    local search_paths=("." "binaries" "../binaries")
-
-    for path in "${search_paths[@]}"; do
-        if [ -f "$path/$filename" ]; then
-            echo "$path/$filename"
-            return 0
-        fi
-    done
-
-    # 如果在搜索路径中找不到，返回原始文件名（可能在当前目录）
-    echo "$filename"
-    return 0
-}
-
-# 设置分发文件变量
-setup_dist_files() {
-    # 如果变量已经设置（从外部传入），则不覆盖
-    if [ -z "$DistFile1" ]; then
-        local arch_file=$(detect_arch_file)
-        DistFile1=$(find_file "$arch_file")
-        log_info "设置 DistFile1: $DistFile1"
-    else
-        log_info "使用外部设置的 DistFile1: $DistFile1"
-    fi
-
-    if [ -z "$DistFile2" ]; then
-        local webui_file="${BUILTIN_WEBUI:-metacubexd.tgz}"
-        DistFile2=$(find_file "$webui_file")
-        log_info "设置 DistFile2: $DistFile2"
-    else
-        log_info "使用外部设置的 DistFile2: $DistFile2"
-    fi
-}
-
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 日志函数
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-# 初始化配置和文件变量
-log_info "初始化安装配置..."
-load_config
-setup_dist_files
+# 普通用户安装：所有文件均位于当前用户的家目录，不需要 sudo。
+MIHOMO_DIR="$HOME/mihomo"
 
-# 检查 /etc/mihomo 目录是否存在
-if [ -d "$MihomoDir" ]; then
-    read -p "/etc/mihomo 目录已存在，是否覆盖？[y/N]: " choice
-    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
-        echo "取消安装"
-        exit 0
+ensure_x86_64() {
+    if [[ "$(uname -m)" != "x86_64" ]]; then
+        log_error "此安装脚本仅支持 x86_64，当前架构：$(uname -m)"
+        exit 1
     fi
-    echo "正在覆盖 /etc/mihomo 目录..."
-    rm -rf "$MihomoDir"
-fi
+}
 
-# 创建 /etc/mihomo 目录
-echo "创建目录 /etc/mihomo..."
-mkdir -p "$MihomoDir"
+valid_gzip() {
+    [[ -f "$1" ]] && [[ $(wc -c < "$1") -gt 1000 ]] && gzip -t "$1" 2>/dev/null
+}
 
-# 检查并终止正在运行的 mihomo 进程
-echo "检查正在运行的 mihomo 进程..."
-pid=$(pgrep mihomo 2>/dev/null || true)
-if [ -n "$pid" ]; then
-    echo "发现正在运行的 mihomo 进程 (PID: $pid)，正在终止..."
-    kill -9 "$pid" 2>/dev/null || true
-    sleep 1
-    # 再次检查是否成功终止
-    if pgrep mihomo >/dev/null 2>&1; then
-        log_warn "mihomo 进程可能仍在运行，请手动检查"
+download_file() {
+    local url="$1" output="$2" description="$3"
+    local mirror candidate
+
+    for mirror in "${GITHUB_MIRRORS[@]}"; do
+        candidate="${mirror}${url}"
+        log_info "尝试下载 ${description}：${candidate}"
+        if curl -fL --retry 2 --retry-all-errors --connect-timeout 10 --max-time 180 -o "$output" "$candidate"; then
+            if valid_gzip "$output"; then
+                log_success "下载成功：${description}"
+                return 0
+            fi
+            log_warn "下载文件校验失败，尝试下一个镜像"
+        fi
+        rm -f "$output"
+    done
+
+    log_error "所有镜像均无法下载 ${description}"
+    return 1
+}
+
+fetch_github_json() {
+    local url="$1" mirror candidate response
+
+    for mirror in "${GITHUB_MIRRORS[@]}"; do
+        candidate="${mirror}${url}"
+        log_info "尝试查询 GitHub Release：${candidate}"
+        if response="$(curl -fsSL --retry 2 --retry-all-errors --connect-timeout 10 --max-time 90 "$candidate")" \
+            && grep -q '"browser_download_url"' <<< "$response"; then
+            GITHUB_JSON="$response"
+            return 0
+        fi
+    done
+
+    log_error "所有镜像均无法查询 GitHub Release"
+    return 1
+}
+
+# 仅选取脚本同级 bin/ 中的 AMD64 v2 构建；存在多个时取版本号最高者。
+find_local_v2() {
+    local candidates=()
+    shopt -s nullglob
+    candidates=("$SCRIPT_DIR/bin/mihomo-linux-amd64-v2-"*.gz)
+    shopt -u nullglob
+    ((${#candidates[@]})) || return 1
+    printf '%s\n' "${candidates[@]}" | sort -V | tail -n 1
+}
+
+download_release() {
+    local json url
+    fetch_github_json "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
+    json="$GITHUB_JSON"
+    # AMD64 资源可能带 compatible 后缀；两种 Release 命名均兼容。
+    url="$(printf '%s\n' "$json" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | grep -E '/mihomo-linux-amd64(-compatible)?-v[^/]*\.gz$' | head -n 1 || true)"
+    [[ -n "$url" ]] || { log_error "最新 Release 中没有 AMD64 的 gzip 资源"; return 1; }
+
+    DOWNLOADED_ARCHIVE="$(mktemp "$MIHOMO_DIR/.mihomo-download.XXXXXX.gz")"
+    download_file "$url" "$DOWNLOADED_ARCHIVE" "最新 Mihomo 核心"
+}
+
+install_core() {
+    local archive local_archive
+    if local_archive="$(find_local_v2)" && valid_gzip "$local_archive"; then
+        archive="$local_archive"
+        log_info "使用本地资源: $(basename "$archive")"
     else
-        log_success "mihomo 进程已成功终止"
+        [[ -n "${local_archive:-}" ]] && log_warn "本地资源无效，改为下载 GitHub Release"
+        download_release
+        archive="$DOWNLOADED_ARCHIVE"
     fi
-else
-    echo "未发现运行中的 mihomo 进程"
-fi
+    gzip -cd "$archive" > "$MIHOMO_DIR/mihomo"
+    chmod 755 "$MIHOMO_DIR/mihomo"
+    [[ -n "${DOWNLOADED_ARCHIVE:-}" ]] && rm -f "$DOWNLOADED_ARCHIVE"
+    log_success "Mihomo 核心已安装"
+}
 
-# 检查并下载 mihomo 核心文件
-echo "检查 mihomo 核心文件..."
-if ! is_valid_file "$DistFile1"; then
-    log_warn "本地 mihomo 文件不存在或为占位文件，尝试从 GitHub 下载..."
-    local_arch=$(uname -m)
-    case $local_arch in
-        x86_64)  download_name="mihomo-linux-amd64-compatible-${MIHOMO_VERSION:-v1.19.12}.gz" ;;
-        aarch64) download_name="mihomo-linux-arm64-${MIHOMO_VERSION:-v1.19.12}.gz" ;;
-        arm64)   download_name="mihomo-linux-arm64-${MIHOMO_VERSION:-v1.19.12}.gz" ;;
-        armv7l)  download_name="mihomo-linux-armv7-${MIHOMO_VERSION:-v1.19.12}.gz" ;;
-        *)       log_error "不支持的架构: $local_arch"; exit 1 ;;
-    esac
-    download_url="${MIHOMO_DOWNLOAD_URL:-https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION:-v1.19.12}}/$download_name"
-    mkdir -p binaries
-    DistFile1="binaries/$download_name"
-    download_file "$download_url" "$DistFile1" "mihomo 核心"
-fi
+copy_if_present() {
+    local source="$1" target="$2"
+    if [[ -f "$source" ]]; then
+        cp "$source" "$target"
+        log_success "已复制 $(basename "$source")"
+    else
+        log_warn "未找到 $(basename "$source")，跳过复制"
+    fi
+}
 
-# 检查并下载 WebUI 文件
-echo "检查 WebUI 文件..."
-if ! is_valid_file "$DistFile2"; then
-    log_warn "本地 WebUI 文件不存在或为占位文件，尝试从 GitHub 下载..."
-    webui_url="https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz"
-    mkdir -p binaries
-    DistFile2="binaries/metacubexd.tgz"
-    download_file "$webui_url" "$DistFile2" "WebUI 前端" || log_warn "WebUI 下载失败，将跳过前端安装"
-fi
+port_in_use() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnuH 2>/dev/null | awk -v port="$port" '$5 ~ ":" port "$" { found = 1 } END { exit !found }'
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -ltnu 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" { found = 1 } END { exit !found }'
+    else
+        return 1
+    fi
+}
 
-# 解压文件
-echo "解压文件 $DistFile1 和 $DistFile2..."
-if is_valid_file "$DistFile1"; then
-    gunzip -c "$DistFile1" > "$MihomoDir/mihomo"
-    chmod +x "$MihomoDir/mihomo"
-    log_success "mihomo 核心解压完成"
-else
-    log_error "找不到有效的 mihomo 文件: $DistFile1"
-    log_error "请手动下载 mihomo 文件到 binaries/ 目录"
-    exit 1
-fi
+random_available_port() {
+    local port candidate
+    local -a chosen=("$@")
+    for _ in {1..100}; do
+        candidate=$((20000 + RANDOM % 40000))
+        [[ " ${chosen[*]} " == *" $candidate "* ]] && continue
+        if ! port_in_use "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    log_error "无法在 20000-59999 范围内找到可用端口"
+    return 1
+}
 
-if is_valid_file "$DistFile2"; then
-    mkdir -p "$MihomoDir/ui"
-    tar -xzf "$DistFile2" -C "$MihomoDir/ui"
-    log_success "WebUI 解压完成"
-else
-    log_warn "找不到有效的 WebUI 文件: $DistFile2，跳过解压"
-fi
+configure_random_ports() {
+    local config="$MIHOMO_DIR/config.yaml"
+    local http_port socks_port controller_port dns_port
+    [[ -f "$config" ]] || return 0
 
-# 复制 config.yaml 文件到 /etc/mihomo
-if [ -f "$ConfigFile" ]; then
-    echo "复制 $ConfigFile 到 $MihomoDir..."
-    cp "$ConfigFile" "$MihomoDir/"
-    log_success "config.yaml 复制完成"
-else
-    echo "找不到 config.yaml，跳过复制"
-fi
+    http_port="$(random_available_port)"
+    socks_port="$(random_available_port "$http_port")"
+    controller_port="$(random_available_port "$http_port" "$socks_port")"
+    dns_port="$(random_available_port "$http_port" "$socks_port" "$controller_port")"
 
-# 复制 Country.mmdb 到 /etc/mihomo
-if [ -f "$CountryFile" ]; then
-    echo "复制 $CountryFile 到 $MihomoDir..."
-    cp "$CountryFile" "$MihomoDir/"
-    log_success "Country.mmdb 复制完成"
-else
-    echo "找不到文件 $CountryFile，跳过复制"
-fi
+    sed -i -E \
+        -e "s/^port: [0-9]+$/port: $http_port/" \
+        -e "s/^socks-port: [0-9]+$/socks-port: $socks_port/" \
+        -e "s|^external-controller: 127\\.0\\.0\\.1:[0-9]+$|external-controller: 127.0.0.1:$controller_port|" \
+        -e "s|^  listen: 127\\.0\\.0\\.1:[0-9]+$|  listen: 127.0.0.1:$dns_port|" \
+        "$config"
+    log_success "已分配本机随机端口：HTTP $http_port，SOCKS $socks_port，控制接口 $controller_port，DNS $dns_port"
+}
 
-# 创建 systemd 配置文件
-echo "创建 systemd 配置文件..."
-cat > /etc/systemd/system/mihomo.service << EOF
+prompt_subscription_url() {
+    local url
+    while true; do
+        read -r -p "请输入 Clash/Mihomo 订阅链接（以 http:// 或 https:// 开头）: " url
+        if [[ "$url" =~ ^https?:// ]]; then
+            SUBSCRIPTION_URL="$url"
+            return 0
+        fi
+        log_warn "订阅链接格式无效，请重新输入"
+    done
+}
+
+write_subscription_url() {
+    local config="$MIHOMO_DIR/config.yaml" escaped_url
+    escaped_url="$(printf '%s' "$SUBSCRIPTION_URL" | sed 's/[\\&|"]/\\&/g')"
+    sed -i -E "s|^    url:.*$|    url: \"$escaped_url\"|" "$config"
+}
+
+write_service() {
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=mihomo Daemon, Another Clash Kernel.
-After=network.target NetworkManager.service systemd-networkd.service iwd.service
+Description=Mihomo Daemon
+After=network.target
 
 [Service]
 Type=simple
-LimitNPROC=500
+WorkingDirectory=$MIHOMO_DIR
+ExecStart=$MIHOMO_DIR/mihomo -d $MIHOMO_DIR
+Restart=on-failure
+RestartSec=3
 LimitNOFILE=1000000
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_TIME CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_TIME CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
-Restart=always
-ExecStartPre=/usr/bin/sleep 1s
-ExecStart=/etc/mihomo/mihomo -d /etc/mihomo
-ExecReload=/bin/kill -HUP \$MAINPID
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
+EOF
+}
+
+is_port_binding_failure() {
+    local service_log="$1"
+    grep -Eqi 'address already in use|bind.*(failed|error|in use)|EADDRINUSE|port.*in use' <<< "$service_log"
+}
+
+start_service_with_port_retries() {
+    local attempt service_log
+
+    if ! systemctl --user daemon-reload; then
+        log_error "无法重载用户 systemd 配置"
+        log_error "请确认当前会话支持 systemctl --user 后重试"
+        return 1
+    fi
+    if ! systemctl --user enable mihomo; then
+        log_error "无法启用 mihomo 用户服务"
+        return 1
+    fi
+
+    for attempt in 1 2 3; do
+        if systemctl --user restart mihomo && systemctl --user is-active --quiet mihomo; then
+            log_success "mihomo 用户服务已启用并启动"
+            return 0
+        fi
+
+        service_log="$(journalctl --user -u mihomo -n 50 --no-pager 2>&1 || true)"
+        if is_port_binding_failure "$service_log" && (( attempt < 3 )); then
+            log_warn "服务因端口绑定失败未能启动（第 $attempt/3 次），正在重新分配端口后重试..."
+            configure_random_ports
+            continue
+        fi
+
+        if is_port_binding_failure "$service_log"; then
+            log_error "已尝试 3 组随机端口，服务仍因端口绑定失败无法启动"
+        else
+            log_error "mihomo 服务启动失败，原因不是可自动恢复的端口绑定冲突"
+        fi
+        log_error "请查看日志：journalctl --user -u mihomo -n 50 --no-pager"
+        return 1
+    done
+}
+
+create_service_commands() {
+    mkdir -p "$COMMAND_DIR"
+
+    cat > "$COMMAND_DIR/clashon" <<'EOF'
+#!/usr/bin/env bash
+# Managed by mihomo-install
+if systemctl --user start mihomo && systemctl --user is-active --quiet mihomo; then
+    echo "Mihomo 已启动"
+else
+    echo "Mihomo 启动失败，请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
+    exit 1
+fi
 EOF
 
-# 重新加载 systemd 配置
-echo "重新加载 systemd 配置..."
-systemctl daemon-reload
-
-# 启动 mihomo 服务
-echo "启动 mihomo 服务..."
-systemctl start mihomo
-
-# 创建代理控制脚本
-echo "创建代理控制脚本..."
-cat > /etc/mihomo/clash_control.sh << 'EOF'
-#!/bin/bash
-# shellcheck disable=SC2015
-# shellcheck disable=SC2155
-
-# clash快捷指令
-function clashon() {
-    sudo systemctl start mihomo && echo '已开启代理环境' || echo '启动失败: 执行 "systemctl status mihomo" 查看日志' || return 1
-    export http_proxy=http://127.0.0.1:7890
-    export https_proxy=http://127.0.0.1:7890
-    export HTTP_PROXY=http://127.0.0.1:7890
-    export HTTPS_PROXY=http://127.0.0.1:7890
-}
-
-function clashoff() {
-    sudo systemctl stop mihomo && echo '已关闭代理环境' || echo '关闭失败: 执行 "systemctl status mihomo" 查看日志' || return 1
-    unset http_proxy
-    unset https_proxy
-    unset HTTP_PROXY
-    unset HTTPS_PROXY
-}
-
-function clashui() {
-    local local_ip=$(hostname -I | awk '{print $1}')
-    local public_ip=$(curl -s ifconfig.me)
-    local port=9090
-    echo "内网 UI 地址: http://$local_ip:$port/ui"
-    echo "公网 UI 地址: http://$public_ip:$port/ui"
-}
-
-function clashuninstall() {
-    echo "🗑️  启动 Mihomo 卸载程序..."
-    if [ -f "/etc/mihomo/uninstall.sh" ]; then
-        sudo bash /etc/mihomo/uninstall.sh
-    elif [ -f "$(dirname "${BASH_SOURCE[0]}")/uninstall.sh" ]; then
-        sudo bash "$(dirname "${BASH_SOURCE[0]}")/uninstall.sh"
-    else
-        echo "❌ 未找到卸载脚本"
-        echo "请手动下载并运行: https://github.com/ForLoveIcu/mihomo-for-linux-install/raw/master/uninstall.sh"
-        echo "或使用命令: curl -fsSL https://github.com/ForLoveIcu/mihomo-for-linux-install/raw/master/uninstall.sh | sudo bash"
-    fi
-}
-
-function clashfrontend() {
-    echo "🎨 启动前端管理工具..."
-    if [ -f "/etc/mihomo/frontend_manager.sh" ]; then
-        sudo bash /etc/mihomo/frontend_manager.sh "$@"
-    else
-        echo "❌ 前端管理脚本不存在"
-        echo "请重新安装或手动下载: https://github.com/ForLoveIcu/mihomo-for-linux-install/raw/master/frontend_manager.sh"
-    fi
-}
+    cat > "$COMMAND_DIR/clashoff" <<'EOF'
+#!/usr/bin/env bash
+# Managed by mihomo-install
+if systemctl --user stop mihomo; then
+    echo "Mihomo 已停止"
+else
+    echo "Mihomo 停止失败，请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
+    exit 1
+fi
 EOF
 
-# 给脚本加上执行权限
-chmod 755 /etc/mihomo/clash_control.sh
-
-# 添加到 bashrc 中(自适应检测系统)
-echo "将代理控制命令添加到 bashrc..."
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    case "$ID" in
-        ubuntu|debian)
-            BASHRC_FILE="$HOME/.bashrc"
-            ;;
-        centos|rhel|fedora|rocky)
-            BASHRC_FILE="/etc/bashrc"
-            ;;
-        *)
-            BASHRC_FILE="$HOME/.bashrc"
-            ;;
-    esac
+    cat > "$COMMAND_DIR/clash_restart" <<'EOF'
+#!/usr/bin/env bash
+# Managed by mihomo-install
+if systemctl --user restart mihomo && systemctl --user is-active --quiet mihomo; then
+    echo "Mihomo 已重启"
 else
-    BASHRC_FILE="$HOME/.bashrc"
+    echo "Mihomo 重启失败，请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
+    exit 1
 fi
+EOF
 
-if ! grep -q "source /etc/mihomo/clash_control.sh" "$BASHRC_FILE"; then
-    echo "source /etc/mihomo/clash_control.sh" >> "$BASHRC_FILE"
-    log_success "已添加到 $BASHRC_FILE"
-fi
+    cat > "$COMMAND_DIR/clash_status" <<'EOF'
+#!/usr/bin/env bash
+# Managed by mihomo-install
+exec systemctl --user status mihomo --no-pager
+EOF
 
-# 重新加载配置
-source "$BASHRC_FILE" 2>/dev/null || true
+    chmod 755 "$COMMAND_DIR/clashon" "$COMMAND_DIR/clashoff" "$COMMAND_DIR/clash_restart" "$COMMAND_DIR/clash_status"
+    log_success "已创建命令：clashon、clashoff、clash_restart、clash_status"
+}
 
-echo "安装完成！可以通过以下命令控制代理："
-echo "- 启动代理环境: clashon"
-echo "- 关闭代理环境: clashoff"
-echo "- 查看 Web 面板地址: clashui"
-echo "- 前端界面管理: clashfrontend"
-echo "- 完整卸载程序: clashuninstall"
-echo "注意：执行代理控制命令时需要管理员权限（sudo）。"
+main() {
+    local choice
 
-# 启动 mihomo 服务并设置代理环境
-log_info "启动 Mihomo 服务..."
-if systemctl start mihomo; then
-    log_success "Mihomo 服务已启动"
-    echo "🌐 管理界面: http://$(hostname -I | awk '{print $1}' 2>/dev/null || echo '127.0.0.1'):9090/ui"
-    echo ""
-    echo "💡 提示：重新加载 shell 配置以使用便捷命令："
-    echo "   source ~/.bashrc"
-else
-    log_error "Mihomo 服务启动失败，请检查日志: journalctl -u mihomo"
-fi
+    ensure_x86_64
+
+    if [[ -d "$MIHOMO_DIR" ]]; then
+        read -r -p "$MIHOMO_DIR 已存在，是否继续更新 Mihomo 核心？[y/N]: " choice
+        if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+            log_info "安装已取消"
+            return 0
+        fi
+    fi
+
+    UPDATE_CONFIG=false
+    if [[ -f "$MIHOMO_DIR/config.yaml" ]]; then
+        read -r -p "检测到已有 config.yaml，是否覆盖？[y/N]: " choice
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            UPDATE_CONFIG=true
+        else
+            log_info "保留现有 config.yaml，不会修改订阅链接或端口"
+        fi
+    else
+        UPDATE_CONFIG=true
+    fi
+
+    if [[ "$UPDATE_CONFIG" == true ]]; then
+        prompt_subscription_url
+    fi
+
+    mkdir -p "$MIHOMO_DIR"
+    mkdir -p "$SERVICE_DIR"
+    systemctl --user stop mihomo 2>/dev/null || true
+    install_core
+    if [[ "$UPDATE_CONFIG" == true ]]; then
+        copy_if_present "$CONFIG_FILE" "$MIHOMO_DIR/config.yaml"
+        write_subscription_url
+        configure_random_ports
+    fi
+    copy_if_present "$COUNTRY_FILE" "$MIHOMO_DIR/Country.mmdb"
+    write_service
+    if ! start_service_with_port_retries; then
+        log_error "安装未完成：核心文件已写入 $MIHOMO_DIR，但 mihomo 服务未成功启动"
+        return 1
+    fi
+    create_service_commands
+
+    echo
+    log_success "安装完成：$MIHOMO_DIR"
+    echo "配置文件：$MIHOMO_DIR/config.yaml"
+    echo "服务管理：clashon、clashoff、clash_restart、clash_status"
+}
+
+main "$@"

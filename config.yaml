@@ -1,29 +1,38 @@
 port: 7890
 socks-port: 7891
-allow-lan: true
+# 仅对当前用户所在的本机开放代理与控制接口。
+allow-lan: false
+bind-address: 127.0.0.1
 mode: rule
 log-level: info
-external-controller: 0.0.0.0:9090
-external-ui: ui
+external-controller: 127.0.0.1:9090
 
 dns:
   enable: true
-  listen: 0.0.0.0:53
+  # 普通用户不能绑定 1024 以下端口；如需 53 端口，请由管理员另行配置。
+  listen: 127.0.0.1:1053
   nameserver:
     - 8.8.8.8
     - 1.1.1.1
 
-proxies:
-  - name: "示例代理"
+proxy-providers:
+  subscription:
     type: http
-    server: example.com
-    port: 8080
+    # 替换为你的 Clash/Mihomo 订阅链接。
+    url: "https://example.com/your-subscription"
+    path: ./providers/subscription.yaml
+    interval: 86400
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
 
 proxy-groups:
   - name: "PROXY"
     type: select
+    use:
+      - subscription
     proxies:
-      - "示例代理"
       - DIRECT
 
 rules:
