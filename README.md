@@ -5,7 +5,7 @@
 ## 快速使用
 
 ```bash
-git clone https://github.com/paulvkey/mihomo-install.git
+git clone https://ghfast.top/https://github.com/paulvkey/mihomo-install.git
 cd mihomo-install
 bash install.sh
 ```
