@@ -6,7 +6,7 @@
 
 ```bash
 git clone https://ghfast.top/https://github.com/paulvkey/mihomo-install.git
-cd mihomo-install
+cd $HOME/mihomo-install
 bash install.sh
 ```
 
