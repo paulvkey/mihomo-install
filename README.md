@@ -1,20 +1,8 @@
 # Mihomo 核心安装脚本
 
-用于在 systemd Linux 上安装 Mihomo 核心。
+用于在 systemd Linux 上以普通用户身份安装和运行 Mihomo。
 
-## 安装行为
-
-1. 仅支持 `x86_64`（AMD64）Linux；其他架构会直接退出。
-2. 优先使用脚本同级 `bin/` 目录内的 `mihomo-linux-amd64-v2-*.gz`；若有多个，使用版本号最高者。
-3. 本地 v2 包不存在或校验失败时，通过 GitHub Releases API 下载最新版本的 AMD64 gzip 资源。Release 查询与文件下载都会依次尝试 GitHub 加速镜像，并在镜像失败后回退至 GitHub 原始地址。
-4. 首次安装时交互输入订阅链接，并将核心、`config.yaml` 和（若存在）`Country.mmdb` 安装到当前用户的 `~/mihomo`。
-5. 创建用户级 `mihomo.service`，无需 sudo。
-6. 代理、控制接口和 DNS 仅监听 `127.0.0.1`，不会向局域网设备开放。
-7. 每次安装会在 `20000-59999` 范围内为 HTTP、SOCKS、控制接口和 DNS 分配不同的可用随机端口。
-8. 服务因端口绑定失败时，自动重新分配端口并重试，最多 3 次；仍失败时终止安装并显示日志诊断命令。
-9. 安装完成后会交互选择订阅节点；之后每次在交互终端执行 `clashon` 也会再次进入节点选择。
-
-## 使用
+## 快速使用
 
 ```bash
 git clone https://github.com/paulvkey/mihomo-install.git
@@ -22,9 +10,55 @@ cd mihomo-install
 bash install.sh
 ```
 
-### GitHub 网络异常
+安装过程中需要输入 Clash/Mihomo 订阅链接；安装成功后会交互选择节点。
 
-原始地址连接超时或被重置时，可改用镜像克隆：
+脚本会将 `~/.local/bin` 写入 `~/.bashrc`。在当前终端执行一次：
+
+```bash
+source ~/.bashrc
+```
+
+之后可直接使用：
+
+```bash
+clashon             # 启动 Mihomo，并进入节点选择
+clashoff            # 停止 Mihomo
+clash_restart       # 重启 Mihomo
+clash_status        # 查看 Mihomo 状态
+clash_select        # 单独交互选择订阅节点
+```
+
+`clash_select` 依赖 `jq`；缺少时请联系管理员安装，或手动通过 Mihomo 控制 API 选择节点。
+
+## 使用代理
+
+端口会在安装时随机分配。读取 HTTP 代理端口并为当前终端启用代理：
+
+```bash
+HTTP_PORT=$(awk '/^port:/ {print $2; exit}' ~/mihomo/config.yaml)
+export http_proxy="http://127.0.0.1:${HTTP_PORT}"
+export https_proxy="http://127.0.0.1:${HTTP_PORT}"
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$https_proxy"
+```
+
+验证代理连通性：
+
+```bash
+curl -I https://www.google.com
+```
+
+`ping` 使用 ICMP，不会经过 HTTP/SOCKS 代理；请用 `curl` 等 HTTP/HTTPS 请求验证节点。
+
+查看实际端口：
+
+```bash
+grep -E '^(port|socks-port|external-controller):|^  listen:' ~/mihomo/config.yaml
+```
+
+## 安装与重装
+
+GitHub 网络异常时可使用镜像克隆：
 
 ```bash
 git clone https://ghfast.top/https://github.com/paulvkey/mihomo-install.git
@@ -32,84 +66,44 @@ cd mihomo-install
 bash install.sh
 ```
 
-如果你已有本地 HTTP 代理（以下以 7890 为例），可让 Git 通过代理连接后再克隆：
+已有 `~/mihomo` 时，脚本会询问是否更新核心。已有 `~/mihomo/config.yaml` 默认保留；只有明确输入 `y` 才会覆盖。覆盖配置时需要重新输入订阅链接，并重新分配端口。
+
+## 登录、退出与卸载
+
+安装脚本已执行 `systemctl --user enable mihomo`。正常登录且用户 systemd 可用时，重新登录后会自动启动；未启动时可执行：
 
 ```bash
-git config --global http.proxy http://127.0.0.1:7890
-git config --global https.proxy http://127.0.0.1:7890
-git clone https://github.com/paulvkey/mihomo-install.git
+clashon
 ```
 
-不再需要代理时清除 Git 配置：
+无 sudo 权限时，用户登出后服务通常不会持续运行。若要在登出或重启后仍保持运行，需要管理员执行：
 
 ```bash
-git config --global --unset http.proxy
-git config --global --unset https.proxy
+loginctl enable-linger <用户名>
 ```
-
-安装完成后检查服务：
-
-```bash
-systemctl --user status mihomo
-```
-
-重装时，核心会更新；已有 `~/mihomo/config.yaml` 默认保留，只有明确输入 `y` 才会覆盖。选择覆盖时，需要重新输入订阅链接，并会重新分配端口。
-
-## 安装结果
-
-- 核心文件：`~/mihomo/mihomo`
-- 主配置：`~/mihomo/config.yaml`
-- GeoIP 数据库：`~/mihomo/Country.mmdb`（项目内存在时）
-- systemd 用户服务：`~/.config/systemd/user/mihomo.service`
-
-随机端口保存在 `~/mihomo/config.yaml`。需要查看实际端口时，可执行：
-
-```bash
-grep -E '^(port|socks-port|external-controller):|^  listen:' ~/mihomo/config.yaml
-```
-
-安装文件与服务均限定在当前用户目录；不会创建系统级服务或修改其他用户的配置。网络端口仅对本机开放。
-
-服务管理：
-
-```bash
-clashon             # 启动 Mihomo
-clashoff            # 停止 Mihomo
-clash_restart       # 重启 Mihomo
-clash_status        # 查看 Mihomo 状态
-clash_select        # 交互选择订阅节点
-```
-
-安装脚本会自动将 `~/.local/bin` 写入 `~/.bashrc`。当前终端请执行以下命令后再直接使用上述命令：
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-source ~/.bashrc
-```
-
-节点选择依赖 `jq`。无 sudo 权限时，请联系管理员安装 `jq`；也可手动通过 Mihomo 控制 API 选择节点。
-
-### 重新登录后启动
-
-安装脚本已执行 `systemctl --user enable mihomo`。在正常登录且用户 systemd 可用的系统中，重新登录后会自动启动；可用以下命令确认：
-
-```bash
-systemctl --user status mihomo
-```
-
-若未自动启动，手动执行：
-
-```bash
-systemctl --user start mihomo
-```
-
-无 sudo 权限时，用户登出后服务通常不会持续运行；要让它在登出或重启后仍保持运行，需要管理员执行 `loginctl enable-linger <用户名>`。
 
 卸载当前用户的 Mihomo（会删除 `~/mihomo`）：
 
 ```bash
 bash uninstall.sh
 ```
+
+## 安装行为
+
+1. 仅支持 `x86_64`（AMD64）Linux；其他架构会直接退出。
+2. 优先使用同级 `bin/` 的 `mihomo-linux-amd64-v2-*.gz`，存在多个时选版本最高者。
+3. 本地包不存在或无效时，查询 GitHub 最新 Release；查询和下载依次尝试加速镜像，最后回退原始 GitHub。
+4. 核心、配置和 GeoIP 数据安装在当前用户的 `~/mihomo`。
+5. 创建用户级 `mihomo.service`，无需 sudo；代理、控制接口和 DNS 均只监听 `127.0.0.1`，不向局域网开放。
+6. HTTP、SOCKS、控制接口和 DNS 在 `20000-59999` 内使用不同随机端口。端口绑定失败时会自动重分配并重试，最多 3 次；仍失败则终止安装并显示诊断日志命令。
+
+## 安装结果
+
+- 核心文件：`~/mihomo/mihomo`
+- 主配置：`~/mihomo/config.yaml`
+- GeoIP 数据库：`~/mihomo/Country.mmdb`
+- systemd 用户服务：`~/.config/systemd/user/mihomo.service`
+- 管理命令：`~/.local/bin/clashon`、`clashoff`、`clash_restart`、`clash_status`、`clash_select`
 
 ## 要求
 
