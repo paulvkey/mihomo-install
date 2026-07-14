@@ -12,7 +12,7 @@ bash install.sh
 
 安装过程中需要输入 Clash/Mihomo 订阅链接；安装成功后会交互选择节点。
 
-脚本会将 `~/.local/bin` 写入 `~/.bashrc`。在当前终端执行一次：
+脚本会将命令路径和代理加载函数写入 `~/.bashrc`。安装后在当前终端执行一次：
 
 ```bash
 source ~/.bashrc
@@ -21,9 +21,9 @@ source ~/.bashrc
 之后可直接使用：
 
 ```bash
-clashon             # 启动 Mihomo，并进入节点选择
-clashoff            # 停止 Mihomo
-clash_restart       # 重启 Mihomo
+clashon             # 启动 Mihomo、选择节点，并自动为当前终端启用 HTTP/HTTPS 代理
+clashoff            # 停止 Mihomo，并清除当前终端的 HTTP/HTTPS 代理变量
+clash_restart       # 重启 Mihomo，并更新当前终端的 HTTP/HTTPS 代理变量
 clash_status        # 查看 Mihomo 状态
 clash_select        # 单独交互选择订阅节点
 ```
@@ -32,15 +32,9 @@ clash_select        # 单独交互选择订阅节点
 
 ## 使用代理
 
-端口会在安装时随机分配。读取 HTTP 代理端口并为当前终端启用代理：
+端口会在安装时随机分配。执行 `clashon` 后，会按 `~/mihomo/config.yaml` 中的当前 HTTP 端口自动设置当前终端的 `http_proxy`、`https_proxy`、`HTTP_PROXY` 和 `HTTPS_PROXY`。重装或端口重新分配后，无需再次编辑或 `source ~/.bashrc`；下次执行 `clashon` 即会读取新端口。
 
-```bash
-HTTP_PORT=$(awk '/^port:/ {print $2; exit}' ~/mihomo/config.yaml)
-export http_proxy="http://127.0.0.1:${HTTP_PORT}"
-export https_proxy="http://127.0.0.1:${HTTP_PORT}"
-export HTTP_PROXY="$http_proxy"
-export HTTPS_PROXY="$https_proxy"
-```
+新开终端也会自动加载上一次 `clashon` 或 `clash_restart` 保存的代理端口。
 
 验证代理连通性：
 

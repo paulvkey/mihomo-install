@@ -41,6 +41,18 @@ for command in clashon clashoff clash_restart clash_status clash_select; do
     fi
 done
 
+bashrc_file="$HOME/.bashrc"
+if [[ -f "$bashrc_file" ]] && grep -Fqx '# >>> mihomo-install proxy environment >>>' "$bashrc_file"; then
+    temp_file="$(mktemp "${bashrc_file}.XXXXXX")"
+    awk '
+        /^# >>> mihomo-install proxy environment >>>$/ { skip = 1; next }
+        /^# <<< mihomo-install proxy environment <<<$/ { skip = 0; next }
+        !skip { print }
+    ' "$bashrc_file" > "$temp_file"
+    mv "$temp_file" "$bashrc_file"
+    log_success "已移除 ~/.bashrc 中的 Mihomo 代理加载函数"
+fi
+
 if [[ -d "$MIHOMO_DIR" ]]; then
     rm -rf "$MIHOMO_DIR"
     log_success "已删除 $MIHOMO_DIR"

@@ -176,6 +176,24 @@ configure_random_ports() {
     log_success "已分配本机随机端口：HTTP $http_port，SOCKS $socks_port，控制接口 $controller_port，DNS $dns_port"
 }
 
+write_proxy_environment() {
+    local http_port proxy_env_file="$MIHOMO_DIR/proxy.env"
+    http_port="$(awk '/^port:/ {print $2; exit}' "$MIHOMO_DIR/config.yaml")"
+    if [[ ! "$http_port" =~ ^[0-9]+$ ]]; then
+        log_warn "无法从 config.yaml 读取 HTTP 代理端口，跳过代理环境文件生成"
+        return 0
+    fi
+
+    umask 077
+    cat > "$proxy_env_file" <<EOF
+# Managed by mihomo-install. 此文件会由 clashon 自动按当前端口更新。
+export http_proxy="http://127.0.0.1:${http_port}"
+export https_proxy="http://127.0.0.1:${http_port}"
+export HTTP_PROXY="http://127.0.0.1:${http_port}"
+export HTTPS_PROXY="http://127.0.0.1:${http_port}"
+EOF
+}
+
 prompt_subscription_url() {
     local url
     while true; do
@@ -260,8 +278,33 @@ create_service_commands() {
     cat > "$COMMAND_DIR/clashon" <<'EOF'
 #!/usr/bin/env bash
 # Managed by mihomo-install
+set -euo pipefail
+
+CONFIG_FILE="$HOME/mihomo/config.yaml"
+PROXY_ENV_FILE="$HOME/mihomo/proxy.env"
+
+write_proxy_env() {
+    local http_port
+    http_port="$(awk '/^port:/ {print $2; exit}' "$CONFIG_FILE")"
+    if [[ ! "$http_port" =~ ^[0-9]+$ ]]; then
+        echo "无法从 $CONFIG_FILE 读取 HTTP 代理端口。" >&2
+        return 1
+    fi
+
+    umask 077
+    cat > "$PROXY_ENV_FILE" <<ENV
+# Managed by mihomo-install. 此文件会由 clashon 自动按当前端口更新。
+export http_proxy="http://127.0.0.1:${http_port}"
+export https_proxy="http://127.0.0.1:${http_port}"
+export HTTP_PROXY="http://127.0.0.1:${http_port}"
+export HTTPS_PROXY="http://127.0.0.1:${http_port}"
+ENV
+}
+
 if systemctl --user start mihomo && systemctl --user is-active --quiet mihomo; then
+    write_proxy_env
     echo "Mihomo 已启动"
+    echo "HTTP 代理环境已更新；通过 ~/.bashrc 中的 clashon 命令调用时会自动在当前终端生效。"
     if [[ -t 0 && -x "$HOME/.local/bin/clash_select" ]]; then
         "$HOME/.local/bin/clash_select" || echo "节点选择未完成，可稍后执行 clash_select。" >&2
     fi
@@ -283,10 +326,23 @@ else
 fi
 EOF
 
-    cat > "$COMMAND_DIR/clash_restart" <<'EOF'
+cat > "$COMMAND_DIR/clash_restart" <<'EOF'
 #!/usr/bin/env bash
 # Managed by mihomo-install
+set -euo pipefail
+
 if systemctl --user restart mihomo && systemctl --user is-active --quiet mihomo; then
+    http_port="$(awk '/^port:/ {print $2; exit}' "$HOME/mihomo/config.yaml")"
+    if [[ "$http_port" =~ ^[0-9]+$ ]]; then
+        umask 077
+        cat > "$HOME/mihomo/proxy.env" <<ENV
+# Managed by mihomo-install. 此文件会由 clashon 自动按当前端口更新。
+export http_proxy="http://127.0.0.1:${http_port}"
+export https_proxy="http://127.0.0.1:${http_port}"
+export HTTP_PROXY="http://127.0.0.1:${http_port}"
+export HTTPS_PROXY="http://127.0.0.1:${http_port}"
+ENV
+    fi
     echo "Mihomo 已重启"
 else
     echo "Mihomo 重启失败，请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
@@ -312,11 +368,37 @@ EOF
 configure_command_path() {
     local bashrc_file="$HOME/.bashrc"
     local path_line='export PATH="$HOME/.local/bin:$PATH"'
+    local proxy_marker='# >>> mihomo-install proxy environment >>>'
 
     touch "$bashrc_file"
     if ! grep -Fqx "$path_line" "$bashrc_file"; then
         printf '\n# Mihomo user commands\n%s\n' "$path_line" >> "$bashrc_file"
         log_success "已将 ~/.local/bin 添加到 $bashrc_file"
+    fi
+    if ! grep -Fqx "$proxy_marker" "$bashrc_file"; then
+        cat >> "$bashrc_file" <<'EOF'
+
+# >>> mihomo-install proxy environment >>>
+# 新终端会读取上一次 clashon/clash_restart 写入的当前 Mihomo HTTP 端口。
+[[ -r "$HOME/mihomo/proxy.env" ]] && source "$HOME/mihomo/proxy.env"
+
+clashon() {
+    command "$HOME/.local/bin/clashon" "$@" || return $?
+    [[ -r "$HOME/mihomo/proxy.env" ]] && source "$HOME/mihomo/proxy.env"
+}
+
+clash_restart() {
+    command "$HOME/.local/bin/clash_restart" "$@" || return $?
+    [[ -r "$HOME/mihomo/proxy.env" ]] && source "$HOME/mihomo/proxy.env"
+}
+
+clashoff() {
+    command "$HOME/.local/bin/clashoff" "$@" || return $?
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+}
+# <<< mihomo-install proxy environment <<<
+EOF
+        log_success "已配置 clashon 自动加载当前 HTTP 代理环境"
     fi
 }
 
@@ -364,6 +446,7 @@ main() {
         log_error "安装未完成：核心文件已写入 $MIHOMO_DIR，但 mihomo 服务未成功启动"
         return 1
     fi
+    write_proxy_environment
     if ! create_service_commands; then
         return 1
     fi
@@ -375,9 +458,10 @@ main() {
     echo
     log_success "安装完成：$MIHOMO_DIR \n"
     log_info "配置文件：$MIHOMO_DIR/config.yaml"
-    log_info "服务管理：clashon、clashoff、clash_restart、clash_status、clash_select"
-    log_info "请执行 source ~/.bashrc 后直接使用上述命令"
-    log_info "使用 curl -I https://www.google.com 来验证是否成功\n"
+    log_info "服务管理：clashon、clashoff、clash_restart、clash_status、clash_select \n"
+
+    log_info "首次安装后请执行一次 source ~/.bashrc；之后 clashon 会自动加载当前随机端口的代理环境"
+    log_info "然后使用 curl -I https://www.google.com 来验证是否成功\n"
 }
 
 main "$@"
