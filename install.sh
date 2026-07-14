@@ -301,18 +301,84 @@ export HTTPS_PROXY="http://127.0.0.1:${http_port}"
 ENV
 }
 
-if systemctl --user start mihomo && systemctl --user is-active --quiet mihomo; then
-    write_proxy_env
-    echo "Mihomo 已启动"
-    echo "HTTP 代理环境已更新；通过 ~/.bashrc 中的 clashon 命令调用时会自动在当前终端生效。"
-    if [[ -t 0 && -x "$HOME/.local/bin/clash_select" ]]; then
-        "$HOME/.local/bin/clash_select" || echo "节点选择未完成，可稍后执行 clash_select。" >&2
+port_in_use() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnuH 2>/dev/null | awk -v port="$port" '$5 ~ ":" port "$" { found = 1 } END { exit !found }'
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -ltnu 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" { found = 1 } END { exit !found }'
+    else
+        return 1
     fi
+}
+
+random_available_port() {
+    local candidate
+    local -a chosen=("$@")
+    for _ in {1..100}; do
+        candidate=$((20000 + RANDOM % 40000))
+        [[ " ${chosen[*]} " == *" $candidate "* ]] && continue
+        if ! port_in_use "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    echo "无法在 20000-59999 范围内找到可用端口。" >&2
+    return 1
+}
+
+reassign_ports() {
+    local http_port socks_port controller_port dns_port
+    http_port="$(random_available_port)"
+    socks_port="$(random_available_port "$http_port")"
+    controller_port="$(random_available_port "$http_port" "$socks_port")"
+    dns_port="$(random_available_port "$http_port" "$socks_port" "$controller_port")"
+
+    sed -i -E \
+        -e "s/^port: [0-9]+$/port: $http_port/" \
+        -e "s/^socks-port: [0-9]+$/socks-port: $socks_port/" \
+        -e "s|^external-controller: 127\\.0\\.0\\.1:[0-9]+$|external-controller: 127.0.0.1:$controller_port|" \
+        -e "s|^  listen: 127\\.0\\.0\\.1:[0-9]+$|  listen: 127.0.0.1:$dns_port|" \
+        "$CONFIG_FILE"
+    echo "已重新分配端口：HTTP $http_port，SOCKS $socks_port，控制接口 $controller_port，DNS $dns_port。"
+}
+
+is_port_binding_failure() {
+    grep -Eqi 'address already in use|bind.*(failed|error|in use)|EADDRINUSE|port.*in use' <<< "$1"
+}
+
+if systemctl --user is-active --quiet mihomo; then
+    write_proxy_env
+    echo "Mihomo 已在运行，未修改端口；当前 HTTP 代理环境已同步，选择节点请执行clash_select"
     exit 0
-else
-    echo "Mihomo 启动失败，请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
-    exit 1
 fi
+
+for attempt in 1 2 3; do
+    if systemctl --user start mihomo && systemctl --user is-active --quiet mihomo; then
+        write_proxy_env
+        echo "Mihomo 已启动"
+        echo "HTTP 代理环境已更新；通过 ~/.bashrc 中的 clashon 命令调用时会自动在当前终端生效。"
+        if [[ -t 0 && -x "$HOME/.local/bin/clash_select" ]]; then
+            "$HOME/.local/bin/clash_select" || echo "节点选择未完成，可稍后执行 clash_select。" >&2
+        fi
+        exit 0
+    fi
+
+    service_log="$(journalctl --user -u mihomo -n 50 --no-pager 2>&1 || true)"
+    if is_port_binding_failure "$service_log" && (( attempt < 3 )); then
+        echo "Mihomo 因端口占用启动失败（第 $attempt/3 次）；正在重新分配端口..." >&2
+        reassign_ports
+        continue
+    fi
+
+    if is_port_binding_failure "$service_log"; then
+        echo "已尝试 3 组端口，Mihomo 仍无法绑定端口。" >&2
+    else
+        echo "Mihomo 启动失败，原因不是可自动恢复的端口占用。" >&2
+    fi
+    echo "请查看：journalctl --user -u mihomo -n 50 --no-pager" >&2
+    exit 1
+done
 EOF
 
     cat > "$COMMAND_DIR/clashoff" <<'EOF'

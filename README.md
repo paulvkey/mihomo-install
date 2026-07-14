@@ -21,7 +21,7 @@ source ~/.bashrc
 之后可直接使用：
 
 ```bash
-clashon             # 启动 Mihomo、选择节点，并自动为当前终端启用 HTTP/HTTPS 代理
+clashon             # 未运行时启动并选择节点；已运行时仅同步当前 HTTP/HTTPS 代理
 clashoff            # 停止 Mihomo，并清除当前终端的 HTTP/HTTPS 代理变量
 clash_restart       # 重启 Mihomo，并更新当前终端的 HTTP/HTTPS 代理变量
 clash_status        # 查看 Mihomo 状态
@@ -30,7 +30,7 @@ clash_select        # 单独交互选择订阅节点
 
 ## 使用代理
 
-端口会在安装时随机分配。执行 `clashon` 后，会按 `~/mihomo/config.yaml` 中的当前 HTTP 端口自动设置当前终端的 `http_proxy`、`https_proxy`、`HTTP_PROXY` 和 `HTTPS_PROXY`。重装或端口重新分配后，无需再次编辑或 `source ~/.bashrc`；下次执行 `clashon` 即会读取新端口。
+端口会在安装时随机分配。服务正常停止后，`clashon` 会使用原端口启动，不会重新分配端口；若 Mihomo 已运行，它只读取 `~/mihomo/config.yaml` 的当前 HTTP 端口并同步当前终端的 `http_proxy`、`https_proxy`、`HTTP_PROXY` 和 `HTTPS_PROXY`。只有启动失败且日志确认端口被占用时，`clashon` 才会提示用户、重新分配四个端口并重试，最多 3 次。重装或端口重新分配后，无需再次编辑或 `source ~/.bashrc`；下次执行 `clashon` 即会读取新端口。
 
 新开终端也会自动加载上一次 `clashon` 或 `clash_restart` 保存的代理端口。
 
