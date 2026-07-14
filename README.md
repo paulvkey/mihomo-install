@@ -28,8 +28,6 @@ clash_status        # 查看 Mihomo 状态
 clash_select        # 单独交互选择订阅节点
 ```
 
-`clash_select` 依赖 `jq`；缺少时请联系管理员安装，或手动通过 Mihomo 控制 API 选择节点。
-
 ## 使用代理
 
 端口会在安装时随机分配。执行 `clashon` 后，会按 `~/mihomo/config.yaml` 中的当前 HTTP 端口自动设置当前终端的 `http_proxy`、`https_proxy`、`HTTP_PROXY` 和 `HTTPS_PROXY`。重装或端口重新分配后，无需再次编辑或 `source ~/.bashrc`；下次执行 `clashon` 即会读取新端口。
