@@ -15,19 +15,36 @@ DELAY_WARN_MS=1500
 
 usage() {
     cat <<'EOF'
-用法: clashsys <命令>
+Mihomo 系统共享模式帮助
 
-普通用户命令:
-  on       在当前终端启用系统共享代理（需要加载 /etc/profile.d/mihomo-system.sh）
+用法：
+  clashsys <命令>
+
+首次使用：
+  source /etc/profile.d/mihomo-system.sh
+  clashsys on
+
+所有用户命令：
+  on       在当前终端启用系统共享代理
   off      在当前终端停用系统共享代理
   status   查看系统共享 Mihomo 服务状态
+  help     显示本帮助，也可以使用 -h 或 --help
 
-控制组命令:
+控制组命令（需要 root 或 mihomo-control 组权限）：
   select   测速并切换共享节点；会影响所有使用系统代理的用户
   restart  重启系统共享 Mihomo 服务
 
-其他:
-  help     显示本帮助
+说明：
+  1. on/off 只修改当前 shell 的 HTTP/HTTPS 代理变量，不会启动或停止共享服务。
+  2. 如果安装时启用了自动代理，没有个人 Mihomo 的用户下次登录 Bash 后无需执行 on。
+  3. 同时存在个人代理时，当前终端最后执行的 clashon 或 clashsys on 生效。
+  4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/restart。
+
+示例：
+  clashsys on
+  clashsys status
+  clashsys select
+  clashsys off
 EOF
 }
 

@@ -7,7 +7,7 @@
 | 模式 | 安装命令 | 适用场景 |
 |---|---|---|
 | 当前用户模式 | `bash install.sh` | 每个用户拥有独立配置、端口和节点 |
-| 系统共享模式 | `sudo bash system/install.sh` | 管理员安装一次，所有本机用户共享服务和节点 |
+| 系统共享模式 | `sudo bash install_sys.sh` | 管理员安装一次，所有本机用户共享服务和节点 |
 
 两种模式相互独立，可以同时安装。原有 `install.sh`、`uninstall.sh` 和 `clashon` 等个人模式逻辑保持不变。
 
@@ -50,7 +50,7 @@ CLASH_DELAY_TIMEOUT_MS=8000 CLASH_DELAY_WARN_MS=2000 clash_select
 管理员执行：
 
 ```bash
-sudo bash system/install.sh
+sudo bash install_sys.sh
 ```
 
 安装时还会交互询问两项系统共享设置：
@@ -168,7 +168,8 @@ bash scripts/update_resources.sh --all            # 同时更新两类资源
 
 ```text
 mihomo-install/
-├── install.sh                 # 安装和重装入口
+├── install.sh                 # 当前用户模式安装和重装入口
+├── install_sys.sh             # 系统共享模式安装入口（需要 root/sudo）
 ├── uninstall.sh               # 当前用户卸载入口
 ├── README.md
 ├── config/
@@ -177,7 +178,6 @@ mihomo-install/
 │   ├── update_resources.sh    # GeoIP 与核心包维护工具
 │   └── commands/              # 安装到 ~/.local/bin 的管理命令源文件
 ├── system/
-│   ├── install.sh             # 系统共享模式安装入口
 │   ├── uninstall.sh           # 系统共享模式卸载入口
 │   ├── mihomo-system.service  # 系统级 systemd 服务模板
 │   ├── commands/              # clashsys 命令源文件
@@ -189,7 +189,7 @@ mihomo-install/
     └── bin/                   # AMD64 v2 核心包及其 SHA256
 ```
 
-个人模式仍在项目根目录执行 `bash install.sh`、`bash uninstall.sh`；资源维护工具位于 `scripts/`，系统共享模式入口位于 `system/`。
+个人模式仍执行 `bash install.sh`、`bash uninstall.sh`；系统共享模式执行根目录的 `sudo bash install_sys.sh`，其服务模板和卸载入口保留在 `system/`；资源维护工具位于 `scripts/`。
 
 ## 登录、退出与卸载
 

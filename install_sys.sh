@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-# Mihomo 系统级共享安装脚本。不会修改任何用户的 ~/mihomo 或 systemctl --user 服务。
+# Mihomo 系统级共享安装入口。不会修改任何用户的 ~/mihomo 或 systemctl --user 服务。
 set -Eeuo pipefail
 PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export PATH
 
-SYSTEM_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd -- "$SYSTEM_DIR/.." && pwd)"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SYSTEM_DIR="$PROJECT_DIR/system"
 CONFIG_TEMPLATE="$PROJECT_DIR/config/config.yaml"
 RESOURCE_DIR="$PROJECT_DIR/resources"
 COMMAND_SOURCE="$SYSTEM_DIR/commands/clashsys.sh"
@@ -77,7 +77,7 @@ require_root_linux() {
         return 1
     fi
     if ((EUID != 0)); then
-        log_error "系统级安装需要管理员权限，请执行：sudo bash system/install.sh"
+        log_error "系统级安装需要管理员权限，请执行：sudo bash install_sys.sh"
         return 1
     fi
 }

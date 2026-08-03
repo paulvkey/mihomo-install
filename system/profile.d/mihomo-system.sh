@@ -1,4 +1,4 @@
-# Mihomo 系统共享代理 shell 函数。由 system/install.sh 安装。
+# Mihomo 系统共享代理 shell 函数。由 install_sys.sh 安装。
 
 clashsys() {
     _mihomo_action="${1:-help}"
