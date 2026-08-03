@@ -25,7 +25,15 @@ clashon             # 未运行时启动并选择节点；已运行时仅同步�
 clashoff            # 停止 Mihomo，并清除当前终端的 HTTP/HTTPS 代理变量
 clash_restart       # 重启 Mihomo，并更新当前终端的 HTTP/HTTPS 代理变量
 clash_status        # 查看 Mihomo 状态
-clash_select        # 单独交互选择订阅节点
+clash_select        # 测速、过滤异常节点并交互选择订阅节点
+```
+
+`clash_select` 会通过 Mihomo 控制接口测试 `PROXY` 组内的节点，按延迟从低到高展示。超时或不可用节点不会进入选择列表；选择延迟达到 `1500 ms` 的节点时会要求再次确认。默认测试地址为 `https://www.gstatic.com/generate_204`，超时时间为 `5000 ms`。
+
+如需临时调整测试参数，可在执行命令时传入环境变量：
+
+```bash
+CLASH_DELAY_TIMEOUT_MS=8000 CLASH_DELAY_WARN_MS=2000 clash_select
 ```
 
 ## 使用代理
