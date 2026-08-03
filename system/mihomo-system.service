@@ -1,0 +1,23 @@
+[Unit]
+Description=Mihomo System-wide Proxy Service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mihomo
+Group=mihomo
+WorkingDirectory=/var/lib/mihomo
+ExecStart=/usr/local/lib/mihomo/mihomo -d /var/lib/mihomo -f /etc/mihomo/config.yaml
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1000000
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mihomo
+
+[Install]
+WantedBy=multi-user.target
