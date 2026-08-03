@@ -27,8 +27,14 @@ if [[ ! "$CONTROLLER_PORT" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
+CONTROLLER_SECRET="$(awk -F: '/^secret:/ {sub(/^[[:space:]]*/, "", $2); gsub(/^\"|\"$/, "", $2); print $2; exit}' "$CONFIG_FILE")"
+CURL_AUTH_ARGS=()
+if [[ -n "$CONTROLLER_SECRET" ]]; then
+    CURL_AUTH_ARGS=(-H "Authorization: Bearer $CONTROLLER_SECRET")
+fi
+
 API_URL="http://127.0.0.1:${CONTROLLER_PORT}/proxies/${GROUP_NAME}"
-RESPONSE="$(curl -fsS "$API_URL")" || {
+RESPONSE="$(curl -fsS "${CURL_AUTH_ARGS[@]}" "$API_URL")" || {
     echo "无法连接 Mihomo 控制接口：$API_URL" >&2
     exit 1
 }
@@ -53,7 +59,7 @@ select NODE in "${NODES[@]}"; do
     fi
 
     PAYLOAD="$(jq -n --arg name "$NODE" '{name: $name}')"
-    curl -fsS -X PUT -H 'Content-Type: application/json' -d "$PAYLOAD" "$API_URL" >/dev/null
+    curl -fsS "${CURL_AUTH_ARGS[@]}" -X PUT -H 'Content-Type: application/json' -d "$PAYLOAD" "$API_URL" >/dev/null
     echo "已切换到：$NODE"
     exit 0
 done

@@ -6,6 +6,7 @@ set -euo pipefail
 MIHOMO_DIR="$HOME/mihomo"
 SERVICE_FILE="$HOME/.config/systemd/user/mihomo.service"
 COMMAND_DIR="$HOME/.local/bin"
+COMMAND_LIB_DIR="$HOME/.local/lib/mihomo-install"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -49,8 +50,15 @@ if [[ -f "$bashrc_file" ]] && grep -Fqx '# >>> mihomo-install proxy environment 
         /^# <<< mihomo-install proxy environment <<<$/ { skip = 0; next }
         !skip { print }
     ' "$bashrc_file" > "$temp_file"
-    mv "$temp_file" "$bashrc_file"
+    cat "$temp_file" > "$bashrc_file"
+    rm -f "$temp_file"
     log_success "已移除 ~/.bashrc 中的 Mihomo 代理加载函数"
+fi
+
+if [[ -f "$COMMAND_LIB_DIR/common.sh" ]] && grep -q '用户级 Mihomo 服务与端口管理函数' "$COMMAND_LIB_DIR/common.sh"; then
+    rm -f "$COMMAND_LIB_DIR/common.sh"
+    rmdir "$COMMAND_LIB_DIR" 2>/dev/null || true
+    log_success "已删除 Mihomo 命令公共库"
 fi
 
 if [[ -d "$MIHOMO_DIR" ]]; then

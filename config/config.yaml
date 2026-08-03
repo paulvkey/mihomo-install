@@ -6,6 +6,7 @@ bind-address: 127.0.0.1
 mode: rule
 log-level: info
 external-controller: 127.0.0.1:9090
+# install.sh 会在安装副本中写入随机 secret；仓库模板不保存真实密钥。
 
 profile:
   store-selected: true
