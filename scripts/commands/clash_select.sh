@@ -171,7 +171,7 @@ for INDEX in "${!NODES[@]}"; do
     SELECT_LABELS+=("$DISPLAY_LABEL")
 done
 
-echo "测速完成：${AVAILABLE_COUNT} 个测得延迟，${UNAVAILABLE_COUNT} 个超时或未测得；全部真实节点均按订阅原始顺序保留。"
+echo "测速完成：${AVAILABLE_COUNT} 个测得延迟，${UNAVAILABLE_COUNT} 个超时或未测得。"
 echo "提示：延迟与异常标记仅供参考，不会改变节点顺序，也不会阻止用户选择。"
 
 if [[ "$AUTO_MODE" == true ]]; then
