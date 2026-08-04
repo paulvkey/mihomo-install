@@ -48,6 +48,15 @@ git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/paulvkey/mihomo
 git clone git@github.com:paulvkey/mihomo-install.git
 ```
 
+不需要 Git 历史时，可以下载 `master` 分支源码包：
+
+```bash
+curl -fL --retry 3 -o mihomo-install.tar.gz \
+  https://codeload.github.com/paulvkey/mihomo-install/tar.gz/refs/heads/master
+tar -xzf mihomo-install.tar.gz
+cd mihomo-install-master
+```
+
 ## 当前用户模式
 
 ### 安装
@@ -75,7 +84,7 @@ clash on       # 启动服务并让当前终端使用个人代理
 clash off      # 停止服务，并清理当前终端中的个人代理变量
 clash restart  # 重启服务，并更新当前终端的代理变量
 clash status   # 查看用户级 Mihomo 服务状态
-clash select   # 测速、过滤异常节点并交互选择节点
+clash select   # 测速、标记异常节点并交互选择节点
 clash auth     # 显示手动配置应用所需的地址和用户名、密码
 clash help     # 查看帮助
 ```
@@ -88,7 +97,7 @@ clash help     # 查看帮助
 clash select
 ```
 
-命令会检测 `PROXY` 组内真实代理节点的延迟，并按延迟从低到高展示。`DIRECT` 兜底和超时、不可用节点不会进入选择列表；选择延迟达到 `1500 ms` 的节点时会要求再次确认。
+命令会检测 `PROXY` 组内真实代理节点的延迟，并把测得延迟的节点按从低到高排列。`DIRECT` 是配置兜底，不作为订阅节点展示；超时、不可用或测速请求失败的真实节点不会被删除，而是在列表中标记后继续允许选择。选择高延迟或未测得延迟的节点时会要求再次确认，测速结果仅作为参考。
 
 临时调整测速超时和高延迟阈值：
 
@@ -171,7 +180,7 @@ sudo bash install_sys.sh
 - 自动启用默认选择 `N`，普通用户需要在自己的终端执行 `clashsys on`。选择 `y` 后，没有个人 Mihomo 的用户下次登录 Bash 时会自动使用共享代理。
 - 新增组权限需要用户重新登录后才能生效。
 
-服务启动成功后，安装脚本会立即检测订阅节点并进入首次选择。`DIRECT` 不会被当作订阅节点。如果订阅异常、未加载节点或所有节点都不可用，脚本会发出警告并保留已经安装的服务；修复后执行：
+服务启动成功后，安装脚本会立即检测订阅节点并进入首次选择。`DIRECT` 不会被当作订阅节点；超时或未测得延迟的真实节点仍会显示并允许选择。如果订阅没有加载到任何真实节点，脚本会发出警告并保留已经安装的服务，修复后执行：
 
 ```bash
 clashsys select

@@ -69,26 +69,27 @@ CURL_MAX_TIME=$(((DELAY_TIMEOUT_MS + 999) / 1000 + 5))
 
 echo "当前节点：${CURRENT:-未选择}"
 echo "正在检测 ${#NODES[@]} 个节点的延迟（超时 ${DELAY_TIMEOUT_MS} ms）..."
-DELAY_RESPONSE="$(
+DELAY_TEST_FAILED=false
+if ! DELAY_RESPONSE="$(
     curl -fsS --noproxy '127.0.0.1,localhost,::1' --max-time "$CURL_MAX_TIME" "${CURL_AUTH_ARGS[@]}" \
         --get \
         --data-urlencode "url=${DELAY_TEST_URL}" \
         --data-urlencode "timeout=${DELAY_TIMEOUT_MS}" \
         --data-urlencode "expected=200-299" \
         "$DELAY_API_URL"
-)" || {
-    echo "节点延迟检测失败，未进入节点选择。" >&2
-    echo "请检查 Mihomo 日志、订阅状态和测试地址：${DELAY_TEST_URL}" >&2
-    exit 1
-}
-
-if ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$DELAY_RESPONSE"; then
-    echo "控制接口返回了无效的延迟检测结果。" >&2
-    exit 1
+)"; then
+    echo "节点延迟检测请求失败；仍将保留全部节点供选择。" >&2
+    echo "请留意异常标记，并检查测试地址：${DELAY_TEST_URL}" >&2
+    DELAY_RESPONSE='{}'
+    DELAY_TEST_FAILED=true
+elif ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$DELAY_RESPONSE"; then
+    echo "控制接口返回了无效的延迟结果；仍将保留全部节点供选择。" >&2
+    DELAY_RESPONSE='{}'
+    DELAY_TEST_FAILED=true
 fi
 
 AVAILABLE_RECORDS=()
-UNAVAILABLE_NODES=()
+UNAVAILABLE_INDEXES=()
 for INDEX in "${!NODES[@]}"; do
     NODE="${NODES[$INDEX]}"
     DELAY="$(
@@ -99,19 +100,16 @@ for INDEX in "${!NODES[@]}"; do
     if [[ "$DELAY" =~ ^[0-9]+$ ]] && ((DELAY > 0)); then
         AVAILABLE_RECORDS+=("${DELAY}"$'\t'"${INDEX}")
     else
-        UNAVAILABLE_NODES+=("$NODE")
+        UNAVAILABLE_INDEXES+=("$INDEX")
     fi
 done
 
-if ((${#AVAILABLE_RECORDS[@]} == 0)); then
-    echo "所有节点均超时或不可用，请检查订阅、网络和 Mihomo 日志。" >&2
-    exit 1
-fi
-
 SORTED_RECORDS=()
-while IFS= read -r RECORD; do
-    SORTED_RECORDS+=("$RECORD")
-done < <(printf '%s\n' "${AVAILABLE_RECORDS[@]}" | sort -n -k1,1)
+if ((${#AVAILABLE_RECORDS[@]} > 0)); then
+    while IFS= read -r RECORD; do
+        SORTED_RECORDS+=("$RECORD")
+    done < <(printf '%s\n' "${AVAILABLE_RECORDS[@]}" | sort -n -k1,1)
+fi
 SELECT_NODES=()
 SELECT_DELAYS=()
 SELECT_LABELS=()
@@ -132,11 +130,22 @@ for RECORD in "${SORTED_RECORDS[@]}"; do
     SELECT_LABELS+=("${NODE} [${DELAY} ms，${DELAY_LEVEL}${CURRENT_MARK}]")
 done
 
-echo "测速完成：${#SELECT_NODES[@]} 个可用，${#UNAVAILABLE_NODES[@]} 个不可用；可用节点已按延迟升序排列。"
-if ((${#UNAVAILABLE_NODES[@]} > 0)); then
-    echo "以下节点超时或不可用，已从选择列表排除："
-    printf '  - %s\n' "${UNAVAILABLE_NODES[@]}"
+if [[ "$DELAY_TEST_FAILED" == true ]]; then
+    UNAVAILABLE_LABEL="测速失败"
+else
+    UNAVAILABLE_LABEL="超时/不可用"
 fi
+for INDEX in "${UNAVAILABLE_INDEXES[@]}"; do
+    NODE="${NODES[$INDEX]}"
+    CURRENT_MARK=""
+    [[ "$NODE" == "$CURRENT" ]] && CURRENT_MARK="，当前"
+    SELECT_NODES+=("$NODE")
+    SELECT_DELAYS+=("0")
+    SELECT_LABELS+=("${NODE} [${UNAVAILABLE_LABEL}${CURRENT_MARK}]")
+done
+
+echo "测速完成：${#AVAILABLE_RECORDS[@]} 个测得延迟，${#UNAVAILABLE_INDEXES[@]} 个超时或未测得；全部真实节点均保留在选择列表。"
+echo "提示：异常标记仅供参考，节点仍可选择；测得延迟的节点排在前面并按延迟升序排列。"
 
 echo "请选择节点（输入 0 取消）："
 PS3="请输入序号: "
@@ -153,7 +162,13 @@ select DISPLAY_NODE in "${SELECT_LABELS[@]}"; do
     SELECTED_INDEX=$((REPLY - 1))
     NODE="${SELECT_NODES[$SELECTED_INDEX]}"
     DELAY="${SELECT_DELAYS[$SELECTED_INDEX]}"
-    if ((DELAY >= DELAY_WARN_MS)); then
+    if ((DELAY == 0)); then
+        read -r -p "该节点测速超时或未测得延迟，仍要选择吗？[y/N]: " CONFIRM
+        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+            echo "已放弃该节点，请重新选择。"
+            continue
+        fi
+    elif ((DELAY >= DELAY_WARN_MS)); then
         read -r -p "节点延迟为 ${DELAY} ms，可能不稳定，仍要选择吗？[y/N]: " CONFIRM
         if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
             echo "已放弃该节点，请重新选择。"
@@ -166,6 +181,10 @@ select DISPLAY_NODE in "${SELECT_LABELS[@]}"; do
         echo "切换节点失败，请重新选择或查看 Mihomo 日志。" >&2
         continue
     fi
-    echo "已切换到：${NODE}（${DELAY} ms）"
+    if ((DELAY > 0)); then
+        echo "已切换到：${NODE}（${DELAY} ms）"
+    else
+        echo "已切换到：${NODE}（未测得延迟）"
+    fi
     exit 0
 done

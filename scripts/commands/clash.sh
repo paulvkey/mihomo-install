@@ -17,7 +17,7 @@ Mihomo 当前用户模式帮助
   off      停止 Mihomo，并清理当前终端代理
   restart  重启 Mihomo，保持原端口；端口冲突时最多重试 3 次
   status   查看 Mihomo 用户服务状态
-  select   测速、过滤异常节点并交互选择节点
+  select   测速、标记异常节点并交互选择节点
   auth     显示手动配置代理时需要的用户名、密码和地址
   help     显示本帮助，也可以使用 -h 或 --help
 

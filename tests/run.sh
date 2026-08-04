@@ -72,10 +72,48 @@ grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/scripts/commands/clash_select.sh"
     || fail '个人节点选择仍会把 DIRECT 兜底当成订阅节点'
 grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/system/commands/clashsys.sh" \
     || fail '系统节点选择仍会把 DIRECT 兜底当成订阅节点'
+grep -Fq 'select_delays+=("0")' "$PROJECT_DIR/system/commands/clashsys.sh" \
+    || fail '系统节点选择未保留超时或未测得延迟的真实节点'
 grep -Fq '"$COMMAND_FILE" select' "$PROJECT_DIR/install_sys.sh" \
     || fail '系统安装完成后未进入首次节点选择'
 grep -Fq -- '- GEOIP,CN,DIRECT,no-resolve' "$PROJECT_DIR/config/config.yaml" \
     || fail '配置模板未使用 Country.mmdb'
+
+# 节点测速只提供状态提示：超时节点必须继续出现在选择列表中，DIRECT 仍需隐藏。
+SELECT_HOME="$TMP_ROOT/select-home"
+SELECT_MOCK_BIN="$TMP_ROOT/select-bin"
+mkdir -p "$SELECT_HOME/mihomo" "$SELECT_MOCK_BIN"
+cat > "$SELECT_HOME/mihomo/config.yaml" <<'EOF'
+external-controller: 127.0.0.1:23457
+secret: "test-secret"
+EOF
+cat > "$SELECT_MOCK_BIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$SELECT_MOCK_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+url="${!#}"
+case "$url" in
+    */proxies/PROXY)
+        printf '%s\n' '{"now":"Node A","all":["Node A","Node B","DIRECT"]}'
+        ;;
+    */group/PROXY/delay)
+        printf '%s\n' '{"Node A":123}'
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+EOF
+chmod +x "$SELECT_MOCK_BIN/systemctl" "$SELECT_MOCK_BIN/curl"
+selection_output="$(
+    printf '0\n' | PATH="$SELECT_MOCK_BIN:$PATH" HOME="$SELECT_HOME" \
+        bash "$PROJECT_DIR/scripts/commands/clash_select.sh" 2>&1
+)" || fail '节点选择保留异常节点测试执行失败'
+grep -Fq 'Node A [123 ms' <<< "$selection_output" || fail '可用节点未显示测速延迟'
+grep -Fq 'Node B [超时/不可用]' <<< "$selection_output" || fail '超时节点未保留在选择列表'
+! grep -Fq 'DIRECT [' <<< "$selection_output" || fail 'DIRECT 兜底错误地出现在选择列表'
 
 # 两种安装模式都必须拒绝覆盖未受项目管理的同名目标。
 PERSON_HOME="$TMP_ROOT/person-home"

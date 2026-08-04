@@ -79,9 +79,10 @@ read_controller() {
 
 select_node() {
     local group_uri api_url response current delay_api_url curl_max_time delay_response
-    local index node delay record delay_level current_mark display_node selected_index confirm payload
+    local index node delay record delay_level current_mark display_node selected_index confirm payload unavailable_label
+    local delay_test_failed=false
     local node_count=0 available_count=0 unavailable_count=0
-    local -a nodes=() available_records=() unavailable_nodes=()
+    local -a nodes=() available_records=() unavailable_indexes=()
     local -a sorted_records=() select_nodes=() select_delays=() select_labels=()
 
     require_root_control select
@@ -113,20 +114,22 @@ select_node() {
     curl_max_time=$(((DELAY_TIMEOUT_MS + 999) / 1000 + 5))
     echo "当前共享节点：${current:-未选择}"
     echo "正在检测 ${node_count} 个节点的延迟（超时 ${DELAY_TIMEOUT_MS} ms）..."
-    delay_response="$(
+    if ! delay_response="$(
         curl -fsS --noproxy '127.0.0.1,localhost,::1' --max-time "$curl_max_time" "${CURL_AUTH_ARGS[@]}" \
             --get \
             --data-urlencode "url=${DELAY_TEST_URL}" \
             --data-urlencode "timeout=${DELAY_TIMEOUT_MS}" \
             --data-urlencode "expected=200-299" \
             "$delay_api_url"
-    )" || {
-        echo "节点延迟检测失败，未进入节点选择。" >&2
-        return 1
-    }
-    if ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$delay_response"; then
-        echo "控制接口返回了无效的延迟结果。" >&2
-        return 1
+    )"; then
+        echo "节点延迟检测请求失败；仍将保留全部共享节点供选择。" >&2
+        echo "请留意异常标记，并检查测试地址：${DELAY_TEST_URL}" >&2
+        delay_response='{}'
+        delay_test_failed=true
+    elif ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$delay_response"; then
+        echo "控制接口返回了无效的延迟结果；仍将保留全部共享节点供选择。" >&2
+        delay_response='{}'
+        delay_test_failed=true
     fi
 
     for index in "${!nodes[@]}"; do
@@ -140,18 +143,16 @@ select_node() {
             available_records+=("${delay}"$'\t'"${index}")
             available_count=$((available_count + 1))
         else
-            unavailable_nodes+=("$node")
+            unavailable_indexes+=("$index")
             unavailable_count=$((unavailable_count + 1))
         fi
     done
-    if ((available_count == 0)); then
-        echo "所有共享节点均超时或不可用，请检查订阅、网络和系统日志后重试。" >&2
-        return 1
-    fi
 
-    while IFS= read -r record; do
-        sorted_records+=("$record")
-    done < <(printf '%s\n' "${available_records[@]}" | sort -n -k1,1)
+    if ((available_count > 0)); then
+        while IFS= read -r record; do
+            sorted_records+=("$record")
+        done < <(printf '%s\n' "${available_records[@]}" | sort -n -k1,1)
+    fi
     for record in "${sorted_records[@]}"; do
         IFS=$'\t' read -r delay index <<< "$record"
         node="${nodes[$index]}"
@@ -169,11 +170,22 @@ select_node() {
         select_labels+=("${node} [${delay} ms，${delay_level}${current_mark}]")
     done
 
-    echo "测速完成：${available_count} 个可用，${unavailable_count} 个不可用。"
-    if ((unavailable_count > 0)); then
-        echo "以下节点已排除："
-        printf '  - %s\n' "${unavailable_nodes[@]}"
+    if [[ "$delay_test_failed" == true ]]; then
+        unavailable_label="测速失败"
+    else
+        unavailable_label="超时/不可用"
     fi
+    for index in "${unavailable_indexes[@]}"; do
+        node="${nodes[$index]}"
+        current_mark=""
+        [[ "$node" == "$current" ]] && current_mark="，当前"
+        select_nodes+=("$node")
+        select_delays+=("0")
+        select_labels+=("${node} [${unavailable_label}${current_mark}]")
+    done
+
+    echo "测速完成：${available_count} 个测得延迟，${unavailable_count} 个超时或未测得；全部真实节点均保留在选择列表。"
+    echo "提示：异常标记仅供参考，节点仍可选择；测得延迟的节点排在前面并按延迟升序排列。"
     echo "注意：切换共享节点会影响所有系统代理用户。"
     echo "请选择节点（输入 0 取消）："
     PS3="请输入序号: "
@@ -190,7 +202,13 @@ select_node() {
         selected_index=$((REPLY - 1))
         node="${select_nodes[$selected_index]}"
         delay="${select_delays[$selected_index]}"
-        if ((delay >= DELAY_WARN_MS)); then
+        if ((delay == 0)); then
+            read -r -p "该节点测速超时或未测得延迟，仍要选择吗？[y/N]: " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                echo "已放弃该节点，请重新选择。"
+                continue
+            fi
+        elif ((delay >= DELAY_WARN_MS)); then
             read -r -p "节点延迟为 ${delay} ms，可能不稳定，仍要选择吗？[y/N]: " confirm
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
                 echo "已放弃该节点，请重新选择。"
@@ -203,7 +221,11 @@ select_node() {
             echo "共享节点切换失败，请重新选择或查看系统日志。" >&2
             continue
         fi
-        echo "已切换共享节点：${node}（${delay} ms）"
+        if ((delay > 0)); then
+            echo "已切换共享节点：${node}（${delay} ms）"
+        else
+            echo "已切换共享节点：${node}（未测得延迟）"
+        fi
         return 0
     done
 }
