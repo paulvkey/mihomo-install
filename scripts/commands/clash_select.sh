@@ -57,9 +57,10 @@ CURRENT="$(jq -r '.now // ""' <<< "$RESPONSE")"
 NODES=()
 while IFS= read -r NODE; do
     NODES+=("$NODE")
-done < <(jq -r '.all[]' <<< "$RESPONSE")
+done < <(jq -r '.all[] | select(. != "DIRECT")' <<< "$RESPONSE")
 if ((${#NODES[@]} == 0)); then
-    echo "订阅中没有可选节点，请检查订阅链接与 Mihomo 日志。" >&2
+    echo "订阅未加载到真实代理节点（DIRECT 兜底不计入）。" >&2
+    echo "请检查订阅链接与 Mihomo 日志，修复后重新执行 clash select。" >&2
     exit 1
 fi
 

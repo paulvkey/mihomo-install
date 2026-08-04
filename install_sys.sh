@@ -692,6 +692,18 @@ main() {
     fi
 
     echo
+    if [[ -t 0 ]]; then
+        log_info "正在检测订阅节点并进入首次选择..."
+        if ! "$COMMAND_FILE" select; then
+            log_warn "首次节点选择未完成；系统共享服务已安装并保持运行"
+            log_warn "请检查订阅与日志，修复后执行：clashsys select"
+            log_warn "查看系统日志：journalctl -u $SERVICE_NAME -n 80 --no-pager"
+        fi
+    else
+        log_warn "当前为非交互安装，已跳过首次节点选择；安装后请执行 clashsys select"
+    fi
+
+    echo
     log_success "所有本机用户现在都可以使用系统共享代理"
     log_info "当前终端加载命令：source /etc/profile.d/mihomo-system.sh"
     log_info "启用代理：clashsys on"

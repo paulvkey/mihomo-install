@@ -63,6 +63,12 @@ MIHOMO_COMMAND_LIB_DIR="$PROJECT_DIR/scripts/commands" bash "$PROJECT_DIR/script
     | grep -Fq 'auth' || fail 'clash help 缺少 auth 子命令'
 grep -Fq -- "--noproxy '127.0.0.1,localhost,::1'" "$PROJECT_DIR/scripts/commands/clash_select.sh" \
     || fail '个人节点选择未绕过代理访问控制接口'
+grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/scripts/commands/clash_select.sh" \
+    || fail '个人节点选择仍会把 DIRECT 兜底当成订阅节点'
+grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/system/commands/clashsys.sh" \
+    || fail '系统节点选择仍会把 DIRECT 兜底当成订阅节点'
+grep -Fq '"$COMMAND_FILE" select' "$PROJECT_DIR/install_sys.sh" \
+    || fail '系统安装完成后未进入首次节点选择'
 grep -Fq -- '- GEOIP,CN,DIRECT,no-resolve' "$PROJECT_DIR/config/config.yaml" \
     || fail '配置模板未使用 Country.mmdb'
 

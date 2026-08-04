@@ -771,7 +771,10 @@ main() {
         return 1
     fi
     if [[ -t 0 ]]; then
-        "$COMMAND_DIR/clash" select || log_warn "首次节点选择未完成，稍后可执行 clash select"
+        if ! "$COMMAND_DIR/clash" select; then
+            log_warn "首次节点选择未完成；个人服务已安装并保持运行"
+            log_warn "请检查订阅与日志，修复后执行：clash select"
+        fi
     fi
 
     echo

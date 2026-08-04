@@ -39,6 +39,7 @@ Mihomo 系统共享模式帮助
   2. 如果安装时启用了自动代理，没有个人 Mihomo 的用户下次登录 Bash 后无需执行 on。
   3. 同时存在个人代理时，当前终端最后执行的 clash on 或 clashsys on 生效。
   4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/restart。
+  5. 安装成功后会执行首次节点测速；若订阅未加载节点，请修复后执行 clashsys select。
 
 示例：
   clashsys on
@@ -101,9 +102,10 @@ select_node() {
     while IFS= read -r node; do
         nodes+=("$node")
         node_count=$((node_count + 1))
-    done < <(jq -r '.all[]' <<< "$response")
+    done < <(jq -r '.all[] | select(. != "DIRECT")' <<< "$response")
     if ((node_count == 0)); then
-        echo "订阅中没有可选节点，请检查系统订阅和日志。" >&2
+        echo "系统订阅未加载到真实代理节点（DIRECT 兜底不计入）。" >&2
+        echo "请检查订阅和系统日志，修复后重新执行 clashsys select。" >&2
         return 1
     fi
 
@@ -143,7 +145,7 @@ select_node() {
         fi
     done
     if ((available_count == 0)); then
-        echo "所有共享节点均超时或不可用。" >&2
+        echo "所有共享节点均超时或不可用，请检查订阅、网络和系统日志后重试。" >&2
         return 1
     fi
 
