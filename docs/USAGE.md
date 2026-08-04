@@ -48,15 +48,6 @@ git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/paulvkey/mihomo
 git clone git@github.com:paulvkey/mihomo-install.git
 ```
 
-不需要 Git 历史时，可以下载 `master` 分支源码包：
-
-```bash
-curl -fL --retry 3 -o mihomo-install.tar.gz \
-  https://codeload.github.com/paulvkey/mihomo-install/tar.gz/refs/heads/master
-tar -xzf mihomo-install.tar.gz
-cd mihomo-install-master
-```
-
 ## 当前用户模式
 
 ### 安装
