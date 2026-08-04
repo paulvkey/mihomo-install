@@ -5,16 +5,16 @@
 ## 快速开始
 
 ```bash
-git clone https://ghfast.top/https://github.com/paulvkey/mihomo-install.git
+git clone https://github.com/paulvkey/mihomo-install.git
 cd mihomo-install
 ```
 
 根据使用场景选择一种安装方式：
 
-| 模式 | 安装命令 | 管理命令 | 适用场景 |
-|---|---|---|---|
-| 当前用户模式 | `bash install.sh` | `clash <命令>` | 普通用户安装，独立订阅、端口和节点，无需 sudo |
-| 系统共享模式 | `sudo bash install_sys.sh` | `clashsys <命令>` | 管理员安装一次，所有本机用户共享服务和节点 |
+| 模式         | 安装命令                   | 管理命令          | 适用场景                                      |
+| ------------ | -------------------------- | ----------------- | --------------------------------------------- |
+| 当前用户模式 | `bash install.sh`          | `clash <命令>`    | 普通用户安装，独立订阅、端口和节点，无需 sudo |
+| 系统共享模式 | `sudo bash install_sys.sh` | `clashsys <命令>` | 管理员安装一次，所有本机用户共享服务和节点    |
 
 两种模式相互独立，可以同时安装。完整的安装、日常命令、节点选择、普通用户使用共享代理、登录行为和卸载说明，请阅读：
 

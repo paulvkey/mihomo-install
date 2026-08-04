@@ -4,25 +4,48 @@
 
 本项目支持“当前用户独享”和“系统服务共享”两种模式。两种模式相互独立，可以同时安装：
 
-| 模式 | 安装命令 | 管理命令 | 适用场景 |
-|---|---|---|---|
-| 当前用户模式 | `bash install.sh` | `clash <命令>` | 每个用户使用独立订阅、端口和节点 |
+| 模式         | 安装命令                   | 管理命令          | 适用场景                                   |
+| ------------ | -------------------------- | ----------------- | ------------------------------------------ |
+| 当前用户模式 | `bash install.sh`          | `clash <命令>`    | 每个用户使用独立订阅、端口和节点           |
 | 系统共享模式 | `sudo bash install_sys.sh` | `clashsys <命令>` | 管理员安装一次，所有本机用户共享服务和节点 |
 
 ## 获取项目
 
-GitHub 网络正常时：
+优先从 GitHub 官方仓库克隆：
 
 ```bash
 git clone https://github.com/paulvkey/mihomo-install.git
 cd mihomo-install
 ```
 
-原始地址连接超时或被重置时，可使用镜像：
+### GitHub 克隆网络异常
+
+如果使用第三方加速出现 `gnutls_handshake() failed`、连接超时或连接被重置时，可以操作如下：
 
 ```bash
-git clone https://ghfast.top/https://github.com/paulvkey/mihomo-install.git
+git remote -v
+git remote set-url origin https://github.com/paulvkey/mihomo-install.git
+git remote -v
+```
+
+如果当前机器已经有可用的 Mihomo 代理，先执行 `clash on` 或 `clashsys on`，再克隆官方仓库：
+
+```bash
+clash on
+git clone https://github.com/paulvkey/mihomo-install.git
 cd mihomo-install
+```
+
+也可以只为本次 Git 命令指定已有 HTTP 代理，以下端口仅为示例：
+
+```bash
+git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/paulvkey/mihomo-install.git
+```
+
+已经为 GitHub 配置 SSH 密钥时，可以改用 SSH：
+
+```bash
+git clone git@github.com:paulvkey/mihomo-install.git
 ```
 
 ## 当前用户模式
