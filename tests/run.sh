@@ -11,6 +11,11 @@ fail() {
     exit 1
 }
 
+# README 必须将详细使用说明链接到独立文档。
+[[ -f "$PROJECT_DIR/docs/USAGE.md" ]] || fail '缺少独立使用说明 docs/USAGE.md'
+grep -Fq '[完整使用说明](docs/USAGE.md)' "$PROJECT_DIR/README.md" \
+    || fail 'README 未链接独立使用说明'
+
 # 随机端口必须覆盖指定范围，并排除本轮已选择的端口。
 # shellcheck source=../scripts/lib/ports.sh
 source "$PROJECT_DIR/scripts/lib/ports.sh"
