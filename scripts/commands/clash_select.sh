@@ -164,7 +164,9 @@ for INDEX in "${!NODES[@]}"; do
         DISPLAY_LABEL="${NODE} [${UNAVAILABLE_LABEL}${CURRENT_MARK}]"
     fi
     if [[ "$NODE" == "$CURRENT" ]]; then
-        DISPLAY_LABEL="${CURRENT_COLOR_START}★ ${DISPLAY_LABEL}${CURRENT_COLOR_END}"
+        # Bash select 会把 ANSI 控制符计入列宽，导致后续列错位。
+        # 选择列表只使用可见字符标记；上方的当前节点提示仍保留颜色高亮。
+        DISPLAY_LABEL="★ ${DISPLAY_LABEL}"
     fi
     SELECT_LABELS+=("$DISPLAY_LABEL")
 done

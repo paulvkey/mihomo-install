@@ -4,9 +4,9 @@
 
 本项目支持“当前用户独享”和“系统服务共享”两种模式。两种模式相互独立，可以同时安装：
 
-| 模式         | 安装命令                   | 管理命令          | 适用场景                                   |
-| ------------ | -------------------------- | ----------------- | ------------------------------------------ |
-| 当前用户模式 | `bash install.sh`          | `clash <命令>`    | 每个用户使用独立订阅、端口和节点           |
+| 模式 | 安装命令 | 管理命令 | 适用场景 |
+|---|---|---|---|
+| 当前用户模式 | `bash install.sh` | `clash <命令>` | 每个用户使用独立订阅、端口和节点 |
 | 系统共享模式 | `sudo bash install_sys.sh` | `clashsys <命令>` | 管理员安装一次，所有本机用户共享服务和节点 |
 
 ## 获取项目
@@ -20,13 +20,7 @@ cd mihomo-install
 
 ### GitHub 克隆网络异常
 
-如果使用第三方加速出现 `gnutls_handshake() failed`、连接超时或连接被重置时，可以操作如下：
-
-```bash
-git remote -v
-git remote set-url origin https://github.com/paulvkey/mihomo-install.git
-git remote -v
-```
+出现 `gnutls_handshake() failed`、连接超时或连接被重置时，不要使用 `http.sslVerify=false` 关闭证书校验。第三方 GitHub 镜像可能临时不可用，也可能引入额外的供应链信任风险。
 
 如果当前机器已经有可用的 Mihomo 代理，先执行 `clash on` 或 `clashsys on`，再克隆官方仓库：
 
@@ -46,6 +40,15 @@ git -c http.proxy=http://127.0.0.1:7890 clone https://github.com/paulvkey/mihomo
 
 ```bash
 git clone git@github.com:paulvkey/mihomo-install.git
+```
+
+不需要 Git 历史时，可以下载 `master` 分支源码包：
+
+```bash
+curl -fL --retry 3 -o mihomo-install.tar.gz \
+  https://codeload.github.com/paulvkey/mihomo-install/tar.gz/refs/heads/master
+tar -xzf mihomo-install.tar.gz
+cd mihomo-install-master
 ```
 
 ## 当前用户模式
@@ -88,7 +91,7 @@ clash help     # 查看帮助
 clash select
 ```
 
-命令会检测 `PROXY` 组内真实代理节点的延迟，但列表始终保持订阅返回的原始顺序，不会按延迟重新排序。当前节点使用 `★` 和终端颜色高亮。`DIRECT` 是配置兜底，不作为订阅节点展示；超时、不可用或测速请求失败的真实节点不会被删除，而是在列表中标记后继续允许选择。选择高延迟或未测得延迟的节点时会要求再次确认，测速结果仅作为参考。手动执行 `clash select` 始终进入选择列表，不受启动时自动跳过逻辑影响。
+命令会检测 `PROXY` 组内真实代理节点的延迟，但列表始终保持订阅返回的原始顺序，不会按延迟重新排序。当前节点标题使用终端颜色高亮，选择列表使用不含颜色控制符的 `★` 和“当前”标记，避免 Bash 多列菜单计算错位。`DIRECT` 是配置兜底，不作为订阅节点展示；超时、不可用或测速请求失败的真实节点不会被删除，而是在列表中标记后继续允许选择。选择高延迟或未测得延迟的节点时会要求再次确认，测速结果仅作为参考。手动执行 `clash select` 始终进入选择列表，不受启动时自动跳过逻辑影响。
 
 临时调整测速超时和高延迟阈值：
 

@@ -82,6 +82,14 @@ grep -Fq 'node_delays[$index]="$delay"' "$PROJECT_DIR/system/commands/clashsys.s
     || fail '个人节点选择仍按测速延迟排序'
 ! grep -Fq 'sort -n -k1,1' "$PROJECT_DIR/system/commands/clashsys.sh" \
     || fail '系统节点选择仍按测速延迟排序'
+grep -Fq 'DISPLAY_LABEL="★ ${DISPLAY_LABEL}"' "$PROJECT_DIR/scripts/commands/clash_select.sh" \
+    || fail '个人节点选择没有使用纯文本当前节点标记'
+! grep -Fq 'DISPLAY_LABEL="${CURRENT_COLOR_START}★' "$PROJECT_DIR/scripts/commands/clash_select.sh" \
+    || fail '个人节点选择把 ANSI 控制符放入 select 标签，可能造成多列错位'
+grep -Fq 'display_label="★ ${display_label}"' "$PROJECT_DIR/system/commands/clashsys.sh" \
+    || fail '系统节点选择没有使用纯文本当前节点标记'
+! grep -Fq 'display_label="${current_color_start}★' "$PROJECT_DIR/system/commands/clashsys.sh" \
+    || fail '系统节点选择把 ANSI 控制符放入 select 标签，可能造成多列错位'
 grep -Fq '/usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/sudoers/mihomo-system" \
     || fail '系统 sudoers 未授权控制组执行启动时节点检查'
 grep -Fq 'command /usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \

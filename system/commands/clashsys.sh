@@ -202,7 +202,9 @@ select_node() {
             display_label="${node} [${unavailable_label}${current_mark}]"
         fi
         if [[ "$node" == "$current" ]]; then
-            display_label="${current_color_start}★ ${display_label}${current_color_end}"
+            # Bash select 会把 ANSI 控制符计入列宽，导致后续列错位。
+            # 选择列表只使用可见字符标记；上方的当前节点提示仍保留颜色高亮。
+            display_label="★ ${display_label}"
         fi
         select_labels+=("$display_label")
     done
