@@ -209,7 +209,7 @@ select_node() {
         select_labels+=("$display_label")
     done
 
-    echo "测速完成：${available_count} 个测得延迟，${unavailable_count} 个超时或未测得；全部真实节点均按订阅原始顺序保留。"
+    echo "测速完成：${available_count} 个测得延迟，${unavailable_count} 个超时或未测得。"
     echo "提示：延迟与异常标记仅供参考，不会改变节点顺序，也不会阻止用户选择。"
     if [[ "$auto_mode" == true ]]; then
         if [[ "$current_in_nodes" == true ]] && ((current_delay > 0)); then
