@@ -76,8 +76,20 @@ grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/scripts/commands/clash_select.sh"
     || fail '个人节点选择仍会把 DIRECT 兜底当成订阅节点'
 grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/system/commands/clashsys.sh" \
     || fail '系统节点选择仍会把 DIRECT 兜底当成订阅节点'
-grep -Fq 'select_delays+=("0")' "$PROJECT_DIR/system/commands/clashsys.sh" \
+grep -Fq 'node_delays[$index]="$delay"' "$PROJECT_DIR/system/commands/clashsys.sh" \
     || fail '系统节点选择未保留超时或未测得延迟的真实节点'
+! grep -Fq 'sort -n -k1,1' "$PROJECT_DIR/scripts/commands/clash_select.sh" \
+    || fail '个人节点选择仍按测速延迟排序'
+! grep -Fq 'sort -n -k1,1' "$PROJECT_DIR/system/commands/clashsys.sh" \
+    || fail '系统节点选择仍按测速延迟排序'
+grep -Fq '/usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/sudoers/mihomo-system" \
+    || fail '系统 sudoers 未授权控制组执行启动时节点检查'
+grep -Fq 'command /usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
+    || fail 'clashsys on 未为控制用户触发当前节点检查'
+grep -Fq 'MIHOMO_SYSTEM_SKIP_NODE_CHECK=1 clashsys on' "$PROJECT_DIR/system/profile.d/zz-mihomo-system-auto.sh" \
+    || fail '系统自动代理登录脚本可能触发隐藏的交互选择'
+grep -Fq 'select --auto' "$PROJECT_DIR/scripts/commands/clashon.sh" \
+    || fail 'clash on 未启用当前节点自动检查'
 grep -Fq '"$COMMAND_FILE" select' "$PROJECT_DIR/install_sys.sh" \
     || fail '系统安装完成后未进入首次节点选择'
 grep -Fq -- '- GEOIP,CN,DIRECT,no-resolve' "$PROJECT_DIR/config/config.yaml" \
@@ -100,10 +112,14 @@ cat > "$SELECT_MOCK_BIN/curl" <<'EOF'
 url="${!#}"
 case "$url" in
     */proxies/PROXY)
-        printf '%s\n' '{"now":"Node A","all":["Node A","Node B","DIRECT"]}'
+        printf '%s\n' '{"now":"Node A","all":["Node B","Node A","DIRECT"]}'
         ;;
     */group/PROXY/delay)
-        printf '%s\n' '{"Node A":123}'
+        if [[ "${MOCK_CURRENT_UNAVAILABLE:-}" == 1 ]]; then
+            printf '%s\n' '{"Node B":456}'
+        else
+            printf '%s\n' '{"Node A":123}'
+        fi
         ;;
     *)
         exit 1
@@ -112,12 +128,31 @@ esac
 EOF
 chmod +x "$SELECT_MOCK_BIN/systemctl" "$SELECT_MOCK_BIN/curl"
 selection_output="$(
-    printf '0\n' | PATH="$SELECT_MOCK_BIN:$PATH" HOME="$SELECT_HOME" \
+    printf '0\n' | COLUMNS=40 PATH="$SELECT_MOCK_BIN:$PATH" HOME="$SELECT_HOME" \
         bash "$PROJECT_DIR/scripts/commands/clash_select.sh" 2>&1
 )" || fail '节点选择保留异常节点测试执行失败'
 grep -Fq 'Node A [123 ms' <<< "$selection_output" || fail '可用节点未显示测速延迟'
+grep -Fq '★ Node A [123 ms' <<< "$selection_output" || fail '当前节点未使用醒目标记高亮'
 grep -Fq 'Node B [超时/不可用]' <<< "$selection_output" || fail '超时节点未保留在选择列表'
+grep -Eq '1\) Node B \[超时/不可用\]' <<< "$selection_output" \
+    || fail '节点选择没有保持订阅返回的原始顺序'
 ! grep -Fq 'DIRECT [' <<< "$selection_output" || fail 'DIRECT 兜底错误地出现在选择列表'
+
+auto_selection_output="$(
+    PATH="$SELECT_MOCK_BIN:$PATH" HOME="$SELECT_HOME" \
+        bash "$PROJECT_DIR/scripts/commands/clash_select.sh" --auto 2>&1
+)" || fail '当前节点可用时的自动选择测试执行失败'
+grep -Fq '★ 当前节点 Node A 可用（123 ms），继续使用并跳过选择。' <<< "$auto_selection_output" \
+    || fail '当前节点可用时未自动沿用'
+! grep -Fq '请选择节点' <<< "$auto_selection_output" || fail '当前节点可用时仍进入了选择列表'
+
+unavailable_selection_output="$(
+    printf '0\n' | MOCK_CURRENT_UNAVAILABLE=1 PATH="$SELECT_MOCK_BIN:$PATH" HOME="$SELECT_HOME" \
+        bash "$PROJECT_DIR/scripts/commands/clash_select.sh" --auto 2>&1
+)" || fail '当前节点不可用时的自动选择测试执行失败'
+grep -Fq '当前节点 Node A 超时或未测得延迟，需要重新选择。' <<< "$unavailable_selection_output" \
+    || fail '当前节点不可用时缺少重新选择提示'
+grep -Fq '请选择节点' <<< "$unavailable_selection_output" || fail '当前节点不可用时未进入选择列表'
 
 # 两种安装模式都必须拒绝覆盖未受项目管理的同名目标。
 PERSON_HOME="$TMP_ROOT/person-home"

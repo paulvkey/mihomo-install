@@ -8,6 +8,22 @@ GROUP_NAME="${CLASH_PROXY_GROUP:-PROXY}"
 DELAY_TEST_URL="${CLASH_DELAY_TEST_URL:-https://www.gstatic.com/generate_204}"
 DELAY_TIMEOUT_MS="${CLASH_DELAY_TIMEOUT_MS:-5000}"
 DELAY_WARN_MS="${CLASH_DELAY_WARN_MS:-1500}"
+AUTO_MODE=false
+if [[ "${1:-}" == "--auto" ]]; then
+    AUTO_MODE=true
+    shift
+fi
+if (($# > 0)); then
+    echo "用法：clash select [--auto]" >&2
+    exit 1
+fi
+
+CURRENT_COLOR_START=""
+CURRENT_COLOR_END=""
+if [[ -t 1 || -t 2 ]]; then
+    CURRENT_COLOR_START=$'\033[1;36m'
+    CURRENT_COLOR_END=$'\033[0m'
+fi
 
 if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
     echo "clash select 需要 curl 和 jq，请安装 jq 后重试。" >&2
@@ -55,8 +71,12 @@ RESPONSE="$(curl -fsS --noproxy '127.0.0.1,localhost,::1' "${CURL_AUTH_ARGS[@]}"
 
 CURRENT="$(jq -r '.now // ""' <<< "$RESPONSE")"
 NODES=()
+CURRENT_IN_NODES=false
 while IFS= read -r NODE; do
     NODES+=("$NODE")
+    if [[ "$NODE" == "$CURRENT" ]]; then
+        CURRENT_IN_NODES=true
+    fi
 done < <(jq -r '.all[] | select(. != "DIRECT")' <<< "$RESPONSE")
 if ((${#NODES[@]} == 0)); then
     echo "订阅未加载到真实代理节点（DIRECT 兜底不计入）。" >&2
@@ -67,7 +87,13 @@ fi
 DELAY_API_URL="${CONTROLLER_URL}/group/${GROUP_URI}/delay"
 CURL_MAX_TIME=$(((DELAY_TIMEOUT_MS + 999) / 1000 + 5))
 
-echo "当前节点：${CURRENT:-未选择}"
+if [[ "$CURRENT_IN_NODES" == true ]]; then
+    printf '当前节点：%s★ %s%s\n' "$CURRENT_COLOR_START" "$CURRENT" "$CURRENT_COLOR_END"
+elif [[ -n "$CURRENT" ]]; then
+    echo "当前节点：${CURRENT}（不是可选的真实订阅节点）"
+else
+    echo "当前节点：未选择"
+fi
 echo "正在检测 ${#NODES[@]} 个节点的延迟（超时 ${DELAY_TIMEOUT_MS} ms）..."
 DELAY_TEST_FAILED=false
 if ! DELAY_RESPONSE="$(
@@ -88,8 +114,10 @@ elif ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$DELAY_RESPONSE"; then
     DELAY_TEST_FAILED=true
 fi
 
-AVAILABLE_RECORDS=()
-UNAVAILABLE_INDEXES=()
+NODE_DELAYS=()
+AVAILABLE_COUNT=0
+UNAVAILABLE_COUNT=0
+CURRENT_DELAY=0
 for INDEX in "${!NODES[@]}"; do
     NODE="${NODES[$INDEX]}"
     DELAY="$(
@@ -97,55 +125,66 @@ for INDEX in "${!NODES[@]}"; do
             '(.[$node] // 0) as $delay | if ($delay | type) == "number" then $delay else 0 end' \
             <<< "$DELAY_RESPONSE"
     )"
+    if [[ "$NODE" == "$CURRENT" && "$DELAY" =~ ^[0-9]+$ ]]; then
+        CURRENT_DELAY="$DELAY"
+    fi
+    NODE_DELAYS[$INDEX]="$DELAY"
     if [[ "$DELAY" =~ ^[0-9]+$ ]] && ((DELAY > 0)); then
-        AVAILABLE_RECORDS+=("${DELAY}"$'\t'"${INDEX}")
+        AVAILABLE_COUNT=$((AVAILABLE_COUNT + 1))
     else
-        UNAVAILABLE_INDEXES+=("$INDEX")
+        UNAVAILABLE_COUNT=$((UNAVAILABLE_COUNT + 1))
     fi
 done
 
-SORTED_RECORDS=()
-if ((${#AVAILABLE_RECORDS[@]} > 0)); then
-    while IFS= read -r RECORD; do
-        SORTED_RECORDS+=("$RECORD")
-    done < <(printf '%s\n' "${AVAILABLE_RECORDS[@]}" | sort -n -k1,1)
-fi
 SELECT_NODES=()
 SELECT_DELAYS=()
 SELECT_LABELS=()
-for RECORD in "${SORTED_RECORDS[@]}"; do
-    IFS=$'\t' read -r DELAY INDEX <<< "$RECORD"
-    NODE="${NODES[$INDEX]}"
-    if ((DELAY <= 300)); then
-        DELAY_LEVEL="快"
-    elif ((DELAY < DELAY_WARN_MS)); then
-        DELAY_LEVEL="正常"
-    else
-        DELAY_LEVEL="高延迟"
-    fi
-    CURRENT_MARK=""
-    [[ "$NODE" == "$CURRENT" ]] && CURRENT_MARK="，当前"
-    SELECT_NODES+=("$NODE")
-    SELECT_DELAYS+=("$DELAY")
-    SELECT_LABELS+=("${NODE} [${DELAY} ms，${DELAY_LEVEL}${CURRENT_MARK}]")
-done
-
 if [[ "$DELAY_TEST_FAILED" == true ]]; then
     UNAVAILABLE_LABEL="测速失败"
 else
     UNAVAILABLE_LABEL="超时/不可用"
 fi
-for INDEX in "${UNAVAILABLE_INDEXES[@]}"; do
+for INDEX in "${!NODES[@]}"; do
     NODE="${NODES[$INDEX]}"
+    DELAY="${NODE_DELAYS[$INDEX]:-0}"
     CURRENT_MARK=""
     [[ "$NODE" == "$CURRENT" ]] && CURRENT_MARK="，当前"
     SELECT_NODES+=("$NODE")
-    SELECT_DELAYS+=("0")
-    SELECT_LABELS+=("${NODE} [${UNAVAILABLE_LABEL}${CURRENT_MARK}]")
+    SELECT_DELAYS+=("$DELAY")
+    if [[ "$DELAY" =~ ^[0-9]+$ ]] && ((DELAY > 0)); then
+        if ((DELAY <= 300)); then
+            DELAY_LEVEL="快"
+        elif ((DELAY < DELAY_WARN_MS)); then
+            DELAY_LEVEL="正常"
+        else
+            DELAY_LEVEL="高延迟"
+        fi
+        DISPLAY_LABEL="${NODE} [${DELAY} ms，${DELAY_LEVEL}${CURRENT_MARK}]"
+    else
+        DISPLAY_LABEL="${NODE} [${UNAVAILABLE_LABEL}${CURRENT_MARK}]"
+    fi
+    if [[ "$NODE" == "$CURRENT" ]]; then
+        DISPLAY_LABEL="${CURRENT_COLOR_START}★ ${DISPLAY_LABEL}${CURRENT_COLOR_END}"
+    fi
+    SELECT_LABELS+=("$DISPLAY_LABEL")
 done
 
-echo "测速完成：${#AVAILABLE_RECORDS[@]} 个测得延迟，${#UNAVAILABLE_INDEXES[@]} 个超时或未测得；全部真实节点均保留在选择列表。"
-echo "提示：异常标记仅供参考，节点仍可选择；测得延迟的节点排在前面并按延迟升序排列。"
+echo "测速完成：${AVAILABLE_COUNT} 个测得延迟，${UNAVAILABLE_COUNT} 个超时或未测得；全部真实节点均按订阅原始顺序保留。"
+echo "提示：延迟与异常标记仅供参考，不会改变节点顺序，也不会阻止用户选择。"
+
+if [[ "$AUTO_MODE" == true ]]; then
+    if [[ "$CURRENT_IN_NODES" == true ]] && ((CURRENT_DELAY > 0)); then
+        printf '%s★ 当前节点 %s 可用（%s ms），继续使用并跳过选择。%s\n' \
+            "$CURRENT_COLOR_START" "$CURRENT" "$CURRENT_DELAY" "$CURRENT_COLOR_END"
+        exit 0
+    fi
+    if [[ "$CURRENT_IN_NODES" == true ]]; then
+        printf '%s⚠ 当前节点 %s 超时或未测得延迟，需要重新选择。%s\n' \
+            "$CURRENT_COLOR_START" "$CURRENT" "$CURRENT_COLOR_END" >&2
+    else
+        echo "当前没有已选择且可用的真实订阅节点，需要进行选择。" >&2
+    fi
+fi
 
 echo "请选择节点（输入 0 取消）："
 PS3="请输入序号: "

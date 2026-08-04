@@ -13,7 +13,7 @@ Mihomo 当前用户模式帮助
   clash <命令>
 
 命令：
-  on       启动 Mihomo；已运行时保持原端口并同步代理
+  on       启动 Mihomo 并检查当前节点；可用时沿用，不可用时重新选择
   off      停止 Mihomo，并清理当前终端代理
   restart  重启 Mihomo，保持原端口；端口冲突时最多重试 3 次
   status   查看 Mihomo 用户服务状态

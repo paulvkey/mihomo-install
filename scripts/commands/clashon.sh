@@ -11,18 +11,25 @@ fi
 # shellcheck source=/dev/null
 source "$COMMON_FILE"
 
+auto_select_node() {
+    if [[ -t 0 && -x "$HOME/.local/bin/clash" ]]; then
+        "$HOME/.local/bin/clash" select --auto || {
+            echo "当前节点检查或选择未完成，可稍后执行 clash select。" >&2
+            return 1
+        }
+    fi
+}
+
 if systemctl --user is-active --quiet mihomo; then
     write_proxy_env
     echo "Mihomo 已在运行，未修改端口；当前 HTTP 代理环境已同步。"
-    echo "如需切换节点，请执行 clash select。"
+    auto_select_node || true
     exit 0
 fi
 
 if start_mihomo_with_retries; then
     echo "Mihomo 已启动，HTTP 代理环境已更新。"
-    if [[ -t 0 && -x "$HOME/.local/bin/clash" ]]; then
-        "$HOME/.local/bin/clash" select || echo "节点选择未完成，可稍后执行 clash select。" >&2
-    fi
+    auto_select_node || true
     exit 0
 fi
 exit 1

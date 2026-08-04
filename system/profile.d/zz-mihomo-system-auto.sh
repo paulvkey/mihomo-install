@@ -8,5 +8,5 @@ if [ -n "${HOME:-}" ] \
     && [ ! -d "$HOME/mihomo" ]; then
     # 确保 clashsys shell 函数已定义；重复加载只会覆盖同名函数，不会启用代理。
     . "${MIHOMO_SYSTEM_PROFILE_FILE:-/etc/profile.d/mihomo-system.sh}"
-    clashsys on >/dev/null 2>&1 || true
+    MIHOMO_SYSTEM_SKIP_NODE_CHECK=1 clashsys on >/dev/null 2>&1 || true
 fi

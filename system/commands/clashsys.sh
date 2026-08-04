@@ -25,7 +25,7 @@ Mihomo 系统共享模式帮助
   clashsys on
 
 所有用户命令：
-  on       在当前终端启用系统共享代理
+  on       在当前终端启用系统共享代理；控制用户同时检查当前节点
   off      在当前终端停用系统共享代理
   status   查看系统共享 Mihomo 服务状态
   help     显示本帮助，也可以使用 -h 或 --help
@@ -40,6 +40,7 @@ Mihomo 系统共享模式帮助
   3. 同时存在个人代理时，当前终端最后执行的 clash on 或 clashsys on 生效。
   4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/restart。
   5. 安装成功后会执行首次节点测速；若订阅未加载节点，请修复后执行 clashsys select。
+  6. 控制用户执行 clashsys on 时，当前共享节点可用则沿用；不可用时才进入选择。
 
 示例：
   clashsys on
@@ -51,6 +52,7 @@ EOF
 
 require_root_control() {
     local action="$1"
+    shift
     if ((EUID == 0)); then
         return 0
     fi
@@ -58,7 +60,7 @@ require_root_control() {
         echo "${action} 需要 root 或 ${CONTROL_GROUP} 组权限，当前系统未安装 sudo。" >&2
         exit 1
     fi
-    exec sudo -n "$0" "$action"
+    exec sudo -n "$0" "$action" "$@"
 }
 
 read_controller() {
@@ -79,13 +81,29 @@ read_controller() {
 
 select_node() {
     local group_uri api_url response current delay_api_url curl_max_time delay_response
-    local index node delay record delay_level current_mark display_node selected_index confirm payload unavailable_label
-    local delay_test_failed=false
+    local index node delay delay_level current_mark display_node selected_index confirm payload unavailable_label display_label
+    local delay_test_failed=false auto_mode=false current_in_nodes=false
+    local current_delay=0 current_color_start="" current_color_end=""
     local node_count=0 available_count=0 unavailable_count=0
-    local -a nodes=() available_records=() unavailable_indexes=()
-    local -a sorted_records=() select_nodes=() select_delays=() select_labels=()
+    local -a nodes=() node_delays=() select_nodes=() select_delays=() select_labels=()
 
-    require_root_control select
+    if [[ "${1:-}" == "--auto" ]]; then
+        auto_mode=true
+        shift
+    fi
+    if (($# > 0)); then
+        echo "用法：clashsys select [--auto]" >&2
+        return 1
+    fi
+    if [[ "$auto_mode" == true ]]; then
+        require_root_control select --auto
+    else
+        require_root_control select
+    fi
+    if [[ -t 1 || -t 2 ]]; then
+        current_color_start=$'\033[1;36m'
+        current_color_end=$'\033[0m'
+    fi
     if ! systemctl is-active --quiet "$SERVICE_NAME"; then
         echo "系统共享 Mihomo 未运行，请先执行 clashsys restart。" >&2
         return 1
@@ -103,6 +121,9 @@ select_node() {
     while IFS= read -r node; do
         nodes+=("$node")
         node_count=$((node_count + 1))
+        if [[ "$node" == "$current" ]]; then
+            current_in_nodes=true
+        fi
     done < <(jq -r '.all[] | select(. != "DIRECT")' <<< "$response")
     if ((node_count == 0)); then
         echo "系统订阅未加载到真实代理节点（DIRECT 兜底不计入）。" >&2
@@ -112,7 +133,13 @@ select_node() {
 
     delay_api_url="${CONTROLLER_URL}/group/${group_uri}/delay"
     curl_max_time=$(((DELAY_TIMEOUT_MS + 999) / 1000 + 5))
-    echo "当前共享节点：${current:-未选择}"
+    if [[ "$current_in_nodes" == true ]]; then
+        printf '当前共享节点：%s★ %s%s\n' "$current_color_start" "$current" "$current_color_end"
+    elif [[ -n "$current" ]]; then
+        echo "当前共享节点：${current}（不是可选的真实订阅节点）"
+    else
+        echo "当前共享节点：未选择"
+    fi
     echo "正在检测 ${node_count} 个节点的延迟（超时 ${DELAY_TIMEOUT_MS} ms）..."
     if ! delay_response="$(
         curl -fsS --noproxy '127.0.0.1,localhost,::1' --max-time "$curl_max_time" "${CURL_AUTH_ARGS[@]}" \
@@ -139,35 +166,15 @@ select_node() {
                 '(.[$node] // 0) as $delay | if ($delay | type) == "number" then $delay else 0 end' \
                 <<< "$delay_response"
         )"
+        if [[ "$node" == "$current" && "$delay" =~ ^[0-9]+$ ]]; then
+            current_delay="$delay"
+        fi
+        node_delays[$index]="$delay"
         if [[ "$delay" =~ ^[0-9]+$ ]] && ((delay > 0)); then
-            available_records+=("${delay}"$'\t'"${index}")
             available_count=$((available_count + 1))
         else
-            unavailable_indexes+=("$index")
             unavailable_count=$((unavailable_count + 1))
         fi
-    done
-
-    if ((available_count > 0)); then
-        while IFS= read -r record; do
-            sorted_records+=("$record")
-        done < <(printf '%s\n' "${available_records[@]}" | sort -n -k1,1)
-    fi
-    for record in "${sorted_records[@]}"; do
-        IFS=$'\t' read -r delay index <<< "$record"
-        node="${nodes[$index]}"
-        if ((delay <= 300)); then
-            delay_level="快"
-        elif ((delay < DELAY_WARN_MS)); then
-            delay_level="正常"
-        else
-            delay_level="高延迟"
-        fi
-        current_mark=""
-        [[ "$node" == "$current" ]] && current_mark="，当前"
-        select_nodes+=("$node")
-        select_delays+=("$delay")
-        select_labels+=("${node} [${delay} ms，${delay_level}${current_mark}]")
     done
 
     if [[ "$delay_test_failed" == true ]]; then
@@ -175,17 +182,46 @@ select_node() {
     else
         unavailable_label="超时/不可用"
     fi
-    for index in "${unavailable_indexes[@]}"; do
+    for index in "${!nodes[@]}"; do
         node="${nodes[$index]}"
+        delay="${node_delays[$index]:-0}"
         current_mark=""
         [[ "$node" == "$current" ]] && current_mark="，当前"
         select_nodes+=("$node")
-        select_delays+=("0")
-        select_labels+=("${node} [${unavailable_label}${current_mark}]")
+        select_delays+=("$delay")
+        if [[ "$delay" =~ ^[0-9]+$ ]] && ((delay > 0)); then
+            if ((delay <= 300)); then
+                delay_level="快"
+            elif ((delay < DELAY_WARN_MS)); then
+                delay_level="正常"
+            else
+                delay_level="高延迟"
+            fi
+            display_label="${node} [${delay} ms，${delay_level}${current_mark}]"
+        else
+            display_label="${node} [${unavailable_label}${current_mark}]"
+        fi
+        if [[ "$node" == "$current" ]]; then
+            display_label="${current_color_start}★ ${display_label}${current_color_end}"
+        fi
+        select_labels+=("$display_label")
     done
 
-    echo "测速完成：${available_count} 个测得延迟，${unavailable_count} 个超时或未测得；全部真实节点均保留在选择列表。"
-    echo "提示：异常标记仅供参考，节点仍可选择；测得延迟的节点排在前面并按延迟升序排列。"
+    echo "测速完成：${available_count} 个测得延迟，${unavailable_count} 个超时或未测得；全部真实节点均按订阅原始顺序保留。"
+    echo "提示：延迟与异常标记仅供参考，不会改变节点顺序，也不会阻止用户选择。"
+    if [[ "$auto_mode" == true ]]; then
+        if [[ "$current_in_nodes" == true ]] && ((current_delay > 0)); then
+            printf '%s★ 当前共享节点 %s 可用（%s ms），继续使用并跳过选择。%s\n' \
+                "$current_color_start" "$current" "$current_delay" "$current_color_end"
+            return 0
+        fi
+        if [[ "$current_in_nodes" == true ]]; then
+            printf '%s⚠ 当前共享节点 %s 超时或未测得延迟，需要重新选择。%s\n' \
+                "$current_color_start" "$current" "$current_color_end" >&2
+        else
+            echo "当前没有已选择且可用的真实共享节点，需要进行选择。" >&2
+        fi
+    fi
     echo "注意：切换共享节点会影响所有系统代理用户。"
     echo "请选择节点（输入 0 取消）："
     PS3="请输入序号: "
@@ -252,26 +288,30 @@ restart_service() {
 }
 
 main() {
-    case "${1:-help}" in
+    local action="${1:-help}"
+    (($# == 0)) || shift
+    case "$action" in
         on|off)
             echo "当前 shell 尚未加载 clashsys 函数，无法直接修改父 shell 的代理变量。" >&2
             echo "请先执行：source /etc/profile.d/mihomo-system.sh" >&2
             return 1
             ;;
         status)
+            (($# == 0)) || { echo "用法：clashsys status" >&2; return 1; }
             systemctl status "$SERVICE_NAME" --no-pager
             ;;
         select)
-            select_node
+            select_node "$@"
             ;;
         restart)
+            (($# == 0)) || { echo "用法：clashsys restart" >&2; return 1; }
             restart_service
             ;;
         help|-h|--help)
             usage
             ;;
         *)
-            echo "未知命令：$1" >&2
+            echo "未知命令：$action" >&2
             usage >&2
             return 1
             ;;

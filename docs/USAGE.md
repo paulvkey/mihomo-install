@@ -71,7 +71,7 @@ source ~/.bashrc
 ### 日常命令
 
 ```bash
-clash on       # 启动服务并让当前终端使用个人代理
+clash on       # 启动服务并检查当前节点，让当前终端使用个人代理
 clash off      # 停止服务，并清理当前终端中的个人代理变量
 clash restart  # 重启服务，并更新当前终端的代理变量
 clash status   # 查看用户级 Mihomo 服务状态
@@ -80,7 +80,7 @@ clash auth     # 显示手动配置应用所需的地址和用户名、密码
 clash help     # 查看帮助
 ```
 
-服务已经运行时再次执行 `clash on` 不会随机修改端口，只会读取现有配置并同步当前终端的代理变量。服务未运行时也会优先复用原端口；只有确认启动失败是端口占用造成时，才会提示并重新分配端口，最多尝试 3 次。
+服务已经运行时再次执行 `clash on` 不会随机修改端口，只会读取现有配置、同步当前终端的代理变量并检查当前节点。已经选择的当前节点测速正常时会高亮显示并继续使用，不再弹出选择列表；只有没有选择真实节点，或者当前节点超时、不可用时，才会进入交互选择。服务未运行时也会优先复用原端口；只有确认启动失败是端口占用造成时，才会提示并重新分配端口，最多尝试 3 次。
 
 ### 选择节点
 
@@ -88,7 +88,7 @@ clash help     # 查看帮助
 clash select
 ```
 
-命令会检测 `PROXY` 组内真实代理节点的延迟，并把测得延迟的节点按从低到高排列。`DIRECT` 是配置兜底，不作为订阅节点展示；超时、不可用或测速请求失败的真实节点不会被删除，而是在列表中标记后继续允许选择。选择高延迟或未测得延迟的节点时会要求再次确认，测速结果仅作为参考。
+命令会检测 `PROXY` 组内真实代理节点的延迟，但列表始终保持订阅返回的原始顺序，不会按延迟重新排序。当前节点使用 `★` 和终端颜色高亮。`DIRECT` 是配置兜底，不作为订阅节点展示；超时、不可用或测速请求失败的真实节点不会被删除，而是在列表中标记后继续允许选择。选择高延迟或未测得延迟的节点时会要求再次确认，测速结果仅作为参考。手动执行 `clash select` 始终进入选择列表，不受启动时自动跳过逻辑影响。
 
 临时调整测速超时和高延迟阈值：
 
@@ -214,7 +214,7 @@ grep -Fq '# Auto-enable mihomo-system in interactive Bash shells' "$HOME/.bashrc
   printf '\n%s\n' \
     '# Auto-enable mihomo-system in interactive Bash shells' \
     'if [[ $- == *i* ]] && declare -F clashsys >/dev/null; then' \
-    '    clashsys on >/dev/null 2>&1 || true' \
+    '    MIHOMO_SYSTEM_SKIP_NODE_CHECK=1 clashsys on >/dev/null 2>&1 || true' \
     'fi' >> "$HOME/.bashrc"
 source "$HOME/.bashrc"
 ```
@@ -233,13 +233,15 @@ curl -I https://www.google.com
 所有用户均可执行：
 
 ```bash
-clashsys on       # 当前终端切换到系统共享代理
+clashsys on       # 当前终端切换到系统共享代理；控制用户同时检查当前节点
 clashsys off      # 当前终端停用共享代理，不停止系统服务
 clashsys status   # 查看共享服务状态
 clashsys help     # 查看帮助
 ```
 
 普通用户不需要各自选择节点，管理员或控制用户选择的共享节点会对所有用户生效。
+
+root 或 `mihomo-control` 控制用户显式执行 `clashsys on` 时，会测速检查当前共享节点：当前节点正常时高亮提示并直接沿用，只有当前节点未选择或不可用时才进入交互选择。普通用户仍然直接使用管理员选定的共享节点，不具备检查控制接口或修改全局节点的权限。手动执行 `clashsys select` 始终显示节点列表。
 
 ### 控制用户
 
