@@ -10,7 +10,7 @@ DELAY_TIMEOUT_MS="${CLASH_DELAY_TIMEOUT_MS:-5000}"
 DELAY_WARN_MS="${CLASH_DELAY_WARN_MS:-1500}"
 
 if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-    echo "clash_select 需要 curl 和 jq，请安装 jq 后重试。" >&2
+    echo "clash select 需要 curl 和 jq，请安装 jq 后重试。" >&2
     exit 1
 fi
 
@@ -29,7 +29,7 @@ if [[ ! "$DELAY_WARN_MS" =~ ^[0-9]+$ ]] || ((DELAY_WARN_MS < 100 || DELAY_WARN_M
 fi
 
 if ! systemctl --user is-active --quiet mihomo; then
-    echo "Mihomo 未运行，请先执行 clashon。" >&2
+    echo "Mihomo 未运行，请先执行 clash on。" >&2
     exit 1
 fi
 
@@ -48,7 +48,7 @@ fi
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_PORT}"
 GROUP_URI="$(jq -rn --arg value "$GROUP_NAME" '$value | @uri')"
 API_URL="${CONTROLLER_URL}/proxies/${GROUP_URI}"
-RESPONSE="$(curl -fsS "${CURL_AUTH_ARGS[@]}" "$API_URL")" || {
+RESPONSE="$(curl -fsS --noproxy '127.0.0.1,localhost,::1' "${CURL_AUTH_ARGS[@]}" "$API_URL")" || {
     echo "无法连接 Mihomo 控制接口：$API_URL" >&2
     exit 1
 }
@@ -69,7 +69,7 @@ CURL_MAX_TIME=$(((DELAY_TIMEOUT_MS + 999) / 1000 + 5))
 echo "当前节点：${CURRENT:-未选择}"
 echo "正在检测 ${#NODES[@]} 个节点的延迟（超时 ${DELAY_TIMEOUT_MS} ms）..."
 DELAY_RESPONSE="$(
-    curl -fsS --max-time "$CURL_MAX_TIME" "${CURL_AUTH_ARGS[@]}" \
+    curl -fsS --noproxy '127.0.0.1,localhost,::1' --max-time "$CURL_MAX_TIME" "${CURL_AUTH_ARGS[@]}" \
         --get \
         --data-urlencode "url=${DELAY_TEST_URL}" \
         --data-urlencode "timeout=${DELAY_TIMEOUT_MS}" \
@@ -161,7 +161,7 @@ select DISPLAY_NODE in "${SELECT_LABELS[@]}"; do
     fi
 
     PAYLOAD="$(jq -n --arg name "$NODE" '{name: $name}')"
-    if ! curl -fsS "${CURL_AUTH_ARGS[@]}" -X PUT -H 'Content-Type: application/json' -d "$PAYLOAD" "$API_URL" >/dev/null; then
+    if ! curl -fsS --noproxy '127.0.0.1,localhost,::1' "${CURL_AUTH_ARGS[@]}" -X PUT -H 'Content-Type: application/json' -d "$PAYLOAD" "$API_URL" >/dev/null; then
         echo "切换节点失败，请重新选择或查看 Mihomo 日志。" >&2
         continue
     fi

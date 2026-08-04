@@ -2,6 +2,7 @@
 # 仅为没有个人模式安装痕迹的用户自动启用系统共享代理。
 
 if [ -n "${HOME:-}" ] \
+    && [ ! -x "$HOME/.local/bin/clash" ] \
     && [ ! -x "$HOME/.local/bin/clashon" ] \
     && [ ! -f "$HOME/.config/systemd/user/mihomo.service" ] \
     && [ ! -d "$HOME/mihomo" ]; then

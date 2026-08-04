@@ -7,35 +7,25 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$SCRIPT_DIR/config"
 RESOURCE_DIR="$SCRIPT_DIR/resources"
 COMMAND_SOURCE_DIR="$SCRIPT_DIR/scripts/commands"
+LIB_SOURCE_DIR="$SCRIPT_DIR/scripts/lib"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 COUNTRY_FILE="$RESOURCE_DIR/Country.mmdb"
 SELECT_SCRIPT="$COMMAND_SOURCE_DIR/clash_select.sh"
+AUTH_SCRIPT="$COMMAND_SOURCE_DIR/clash_auth.sh"
 COMMON_SCRIPT="$COMMAND_SOURCE_DIR/common.sh"
+CLASH_SCRIPT="$COMMAND_SOURCE_DIR/clash.sh"
 CLASHON_SCRIPT="$COMMAND_SOURCE_DIR/clashon.sh"
 CLASHOFF_SCRIPT="$COMMAND_SOURCE_DIR/clashoff.sh"
 CLASH_RESTART_SCRIPT="$COMMAND_SOURCE_DIR/clash_restart.sh"
 CLASH_STATUS_SCRIPT="$COMMAND_SOURCE_DIR/clash_status.sh"
+PORTS_LIB="$LIB_SOURCE_DIR/ports.sh"
+USER_AUTH_LIB="$LIB_SOURCE_DIR/user_auth.sh"
+GITHUB_LIB="$LIB_SOURCE_DIR/github.sh"
 SERVICE_DIR="$HOME/.config/systemd/user"
 SERVICE_FILE="$SERVICE_DIR/mihomo.service"
 COMMAND_DIR="$HOME/.local/bin"
 COMMAND_LIB_DIR="$HOME/.local/lib/mihomo-install"
 
-# 镜像地址为 GitHub URL 前缀；最后的空字符串表示 GitHub 原始地址。
-GITHUB_MIRRORS=(
-    "https://ghfast.top/"
-    "https://gh-proxy.com/"
-    "https://ghproxy.net/"
-    "https://mirror.ghproxy.com/"
-    ""
-)
-# 校验元数据优先从 GitHub 原站获取；原站不可达时再尝试镜像。
-GITHUB_METADATA_MIRRORS=(
-    ""
-    "https://ghfast.top/"
-    "https://gh-proxy.com/"
-    "https://ghproxy.net/"
-    "https://mirror.ghproxy.com/"
-)
 CURL_RETRY_ARGS=(--retry 2)
 
 RED='\033[0;31m'
@@ -51,10 +41,11 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # 普通用户安装：所有文件均位于当前用户的家目录，不需要 sudo。
 MIHOMO_DIR="$HOME/mihomo"
+PROXY_AUTH_FILE="$MIHOMO_DIR/proxy-auth"
 
 require_commands() {
     local command_name missing=0
-    for command_name in bash curl gzip jq systemctl journalctl awk sed grep sort mktemp wc od tr; do
+    for command_name in bash curl gzip jq systemctl journalctl awk sed grep sort mktemp wc od tr head; do
         if ! command -v "$command_name" >/dev/null 2>&1; then
             log_error "缺少依赖命令：$command_name"
             missing=1
@@ -77,13 +68,63 @@ require_commands() {
 }
 
 require_project_files() {
-    local source_file
-    for source_file in "$CONFIG_FILE" "$COMMON_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT"; do
+    local source_file installed_component
+    for source_file in "$CONFIG_FILE" "$COUNTRY_FILE" "${COUNTRY_FILE}.sha256" "$PORTS_LIB" "$USER_AUTH_LIB" "$GITHUB_LIB" "$COMMON_SCRIPT" "$CLASH_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT" "$AUTH_SCRIPT"; do
         if [[ ! -f "$source_file" ]]; then
             log_error "项目文件缺失：$source_file"
             return 1
         fi
     done
+    if [[ -L "$MIHOMO_DIR" ]]; then
+        log_error "$MIHOMO_DIR 是符号链接，为避免写入非预期位置而终止"
+        return 1
+    fi
+    if [[ -e "$MIHOMO_DIR" && ! -d "$MIHOMO_DIR" ]]; then
+        log_error "$MIHOMO_DIR 已存在但不是目录，为避免覆盖而终止"
+        return 1
+    fi
+    if [[ -e "$COMMAND_DIR/clash" || -L "$COMMAND_DIR/clash" ]]; then
+        if [[ -L "$COMMAND_DIR/clash" || ! -f "$COMMAND_DIR/clash" ]] || ! grep -Fq '# Managed by mihomo-install' "$COMMAND_DIR/clash"; then
+            log_error "$COMMAND_DIR/clash 已存在但不是本项目管理的普通文件，为避免覆盖而终止"
+            return 1
+        fi
+    fi
+    if [[ -L "$COMMAND_LIB_DIR" ]]; then
+        log_error "$COMMAND_LIB_DIR 是符号链接，为避免覆盖非预期目录而终止"
+        return 1
+    fi
+    for installed_component in ports.sh user_auth.sh common.sh clashon.sh clashoff.sh clash_restart.sh clash_status.sh clash_select.sh clash_auth.sh; do
+        if [[ -L "$COMMAND_LIB_DIR/$installed_component" ]]; then
+            log_error "$COMMAND_LIB_DIR/$installed_component 是符号链接，为避免覆盖非预期文件而终止"
+            return 1
+        fi
+    done
+    if [[ -d "$COMMAND_LIB_DIR" ]] \
+        && [[ ! -f "$COMMAND_LIB_DIR/.managed-by-mihomo-install" ]] \
+        && { [[ ! -f "$COMMAND_LIB_DIR/common.sh" ]] || ! grep -Fq '用户级 Mihomo 服务与端口管理函数' "$COMMAND_LIB_DIR/common.sh"; }; then
+        log_error "$COMMAND_LIB_DIR 已存在但不是本项目管理的目录，为避免覆盖而终止"
+        return 1
+    fi
+    if [[ -L "$SERVICE_FILE" ]]; then
+        log_error "$SERVICE_FILE 是符号链接，为避免覆盖非预期文件而终止"
+        return 1
+    fi
+    if [[ -f "$SERVICE_FILE" ]] \
+        && ! grep -Fq '# Managed by mihomo-install' "$SERVICE_FILE" \
+        && ! grep -Fq "ExecStart=$MIHOMO_DIR/mihomo -d $MIHOMO_DIR" "$SERVICE_FILE"; then
+        log_error "$SERVICE_FILE 已存在但不是本项目管理的服务，为避免覆盖而终止"
+        return 1
+    fi
+}
+
+load_project_libraries() {
+    # shellcheck source=/dev/null
+    source "$PORTS_LIB"
+    # shellcheck source=/dev/null
+    source "$USER_AUTH_LIB"
+    # shellcheck source=/dev/null
+    source "$GITHUB_LIB"
+    mihomo_validate_github_config
 }
 
 ensure_x86_64() {
@@ -117,7 +158,7 @@ download_file() {
     for mirror in "${GITHUB_MIRRORS[@]}"; do
         candidate="${mirror}${url}"
         log_info "尝试下载 ${description}：${candidate}"
-        if curl -fL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 180 -o "$output" "$candidate"; then
+        if curl -fL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_DOWNLOAD_TIMEOUT" -o "$output" "$candidate"; then
             if valid_gzip "$output" "$expected_sha"; then
                 log_success "下载成功并通过 SHA256 校验：${description}"
                 return 0
@@ -137,8 +178,9 @@ fetch_github_json() {
     for mirror in "${GITHUB_METADATA_MIRRORS[@]}"; do
         candidate="${mirror}${url}"
         log_info "尝试查询 GitHub Release：${candidate}"
-        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 90 "$candidate")" \
+        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_METADATA_TIMEOUT" "$candidate")" \
             && grep -q '"browser_download_url"' <<< "$response"; then
+            mihomo_warn_mirror_metadata "$mirror"
             GITHUB_JSON="$response"
             return 0
         fi
@@ -171,7 +213,7 @@ download_release() {
         return 1
     fi
 
-    DOWNLOADED_ARCHIVE="$(mktemp "$target_dir/.mihomo-download.XXXXXX.gz")"
+    DOWNLOADED_ARCHIVE="$(mktemp "$target_dir/.mihomo-download.XXXXXX.gz")" || return 1
     download_file "$url" "$DOWNLOADED_ARCHIVE" "最新 Mihomo 核心" "$expected_sha" || return 1
 }
 
@@ -225,30 +267,8 @@ test_mihomo_config() {
     log_success "Mihomo 配置自检通过"
 }
 
-port_in_use() {
-    local port="$1"
-    if command -v ss >/dev/null 2>&1; then
-        ss -ltnuH 2>/dev/null | awk -v port="$port" '$5 ~ ":" port "$" { found = 1 } END { exit !found }'
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -ltnu 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" { found = 1 } END { exit !found }'
-    else
-        return 1
-    fi
-}
-
 random_available_port() {
-    local port candidate
-    local -a chosen=("$@")
-    for _ in {1..100}; do
-        candidate=$((20000 + RANDOM % 40000))
-        [[ " ${chosen[*]} " == *" $candidate "* ]] && continue
-        if ! port_in_use "$candidate"; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-    log_error "无法在 20000-59999 范围内找到可用端口"
-    return 1
+    mihomo_random_available_port 20000 59999 "$@"
 }
 
 configure_random_ports() {
@@ -287,21 +307,28 @@ ensure_controller_secret() {
 }
 
 write_proxy_environment() {
-    local http_port proxy_env_file="$MIHOMO_DIR/proxy.env"
+    local http_port proxy_env_file="$MIHOMO_DIR/proxy.env" temp_file
     http_port="$(awk '/^port:/ {print $2; exit}' "$MIHOMO_DIR/config.yaml")"
     if [[ ! "$http_port" =~ ^[0-9]+$ ]]; then
         log_warn "无法从 config.yaml 读取 HTTP 代理端口，跳过代理环境文件生成"
         return 0
     fi
+    if ! mihomo_read_proxy_auth "$PROXY_AUTH_FILE"; then
+        log_error "无法读取个人代理认证信息：$PROXY_AUTH_FILE"
+        return 1
+    fi
 
     umask 077
-    cat > "$proxy_env_file" <<EOF
-# Managed by mihomo-install. 此文件会由 clashon 自动按当前端口更新。
-export http_proxy="http://127.0.0.1:${http_port}"
-export https_proxy="http://127.0.0.1:${http_port}"
-export HTTP_PROXY="http://127.0.0.1:${http_port}"
-export HTTPS_PROXY="http://127.0.0.1:${http_port}"
+    temp_file="$(mktemp "$MIHOMO_DIR/.proxy-env.XXXXXX")" || return 1
+    cat > "$temp_file" <<EOF
+# Managed by mihomo-install. 此文件会由 clash on 自动按当前端口更新。
+export http_proxy="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+export https_proxy="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+export HTTP_PROXY="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+export HTTPS_PROXY="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
 EOF
+    chmod 600 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv "$temp_file" "$proxy_env_file" || { rm -f "$temp_file"; return 1; }
 }
 
 prompt_subscription_url() {
@@ -324,6 +351,7 @@ write_subscription_url() {
 
 write_service() {
     cat > "$SERVICE_FILE" <<EOF
+# Managed by mihomo-install
 [Unit]
 Description=Mihomo Daemon
 After=network.target
@@ -335,6 +363,8 @@ ExecStart=$MIHOMO_DIR/mihomo -d $MIHOMO_DIR
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1000000
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=default.target
@@ -393,25 +423,41 @@ start_service_with_port_retries() {
 }
 
 create_service_commands() {
-    local source_file
-    mkdir -p "$COMMAND_DIR" "$COMMAND_LIB_DIR"
+    local source_file legacy_command legacy_file
+    mkdir -p "$COMMAND_DIR" "$COMMAND_LIB_DIR" || return 1
 
-    for source_file in "$COMMON_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT"; do
+    for source_file in "$PORTS_LIB" "$USER_AUTH_LIB" "$COMMON_SCRIPT" "$CLASH_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT" "$AUTH_SCRIPT"; do
         if [[ ! -f "$source_file" ]]; then
             log_error "未找到管理命令源文件：$source_file"
             return 1
         fi
     done
 
+    cp "$PORTS_LIB" "$COMMAND_LIB_DIR/ports.sh" || return 1
+    cp "$USER_AUTH_LIB" "$COMMAND_LIB_DIR/user_auth.sh" || return 1
     cp "$COMMON_SCRIPT" "$COMMAND_LIB_DIR/common.sh" || return 1
-    cp "$CLASHON_SCRIPT" "$COMMAND_DIR/clashon" || return 1
-    cp "$CLASHOFF_SCRIPT" "$COMMAND_DIR/clashoff" || return 1
-    cp "$CLASH_RESTART_SCRIPT" "$COMMAND_DIR/clash_restart" || return 1
-    cp "$CLASH_STATUS_SCRIPT" "$COMMAND_DIR/clash_status" || return 1
-    cp "$SELECT_SCRIPT" "$COMMAND_DIR/clash_select" || return 1
-    chmod 644 "$COMMAND_LIB_DIR/common.sh" || return 1
-    chmod 755 "$COMMAND_DIR/clashon" "$COMMAND_DIR/clashoff" "$COMMAND_DIR/clash_restart" "$COMMAND_DIR/clash_status" "$COMMAND_DIR/clash_select" || return 1
-    log_success "已创建命令：clashon、clashoff、clash_restart、clash_status、clash_select"
+    cp "$CLASHON_SCRIPT" "$COMMAND_LIB_DIR/clashon.sh" || return 1
+    cp "$CLASHOFF_SCRIPT" "$COMMAND_LIB_DIR/clashoff.sh" || return 1
+    cp "$CLASH_RESTART_SCRIPT" "$COMMAND_LIB_DIR/clash_restart.sh" || return 1
+    cp "$CLASH_STATUS_SCRIPT" "$COMMAND_LIB_DIR/clash_status.sh" || return 1
+    cp "$SELECT_SCRIPT" "$COMMAND_LIB_DIR/clash_select.sh" || return 1
+    cp "$AUTH_SCRIPT" "$COMMAND_LIB_DIR/clash_auth.sh" || return 1
+    cp "$CLASH_SCRIPT" "$COMMAND_DIR/clash" || return 1
+    printf '%s\n' '# Managed by mihomo-install' > "$COMMAND_LIB_DIR/.managed-by-mihomo-install" || return 1
+    chmod 644 "$COMMAND_LIB_DIR/ports.sh" "$COMMAND_LIB_DIR/user_auth.sh" "$COMMAND_LIB_DIR/common.sh" || return 1
+    chmod 755 "$COMMAND_DIR/clash" \
+        "$COMMAND_LIB_DIR/clashon.sh" "$COMMAND_LIB_DIR/clashoff.sh" \
+        "$COMMAND_LIB_DIR/clash_restart.sh" "$COMMAND_LIB_DIR/clash_status.sh" \
+        "$COMMAND_LIB_DIR/clash_select.sh" "$COMMAND_LIB_DIR/clash_auth.sh" || return 1
+
+    # 重装新版时仅清理旧版本由本项目创建的独立命令，不删除用户自己的同名文件。
+    for legacy_command in clashon clashoff clash_restart clash_status clash_select; do
+        legacy_file="$COMMAND_DIR/$legacy_command"
+        if [[ -f "$legacy_file" ]] && grep -Eq '^# (Managed by mihomo-install|交互选择 Mihomo 的 PROXY 代理组节点。)$' "$legacy_file"; then
+            rm -f "$legacy_file" || return 1
+        fi
+    done
+    log_success "已创建统一命令：clash on/off/restart/status/select/auth/help"
 }
 
 configure_command_path() {
@@ -420,49 +466,65 @@ configure_command_path() {
     local proxy_marker='# >>> mihomo-install proxy environment >>>'
     local temp_file
 
-    touch "$bashrc_file"
+    touch "$bashrc_file" || return 1
     if ! grep -Fqx "$path_line" "$bashrc_file"; then
-        printf '\n# Mihomo user commands\n%s\n' "$path_line" >> "$bashrc_file"
+        printf '\n# Mihomo user commands\n%s\n' "$path_line" >> "$bashrc_file" || return 1
         log_success "已将 ~/.local/bin 添加到 $bashrc_file"
     fi
     if grep -Fqx "$proxy_marker" "$bashrc_file"; then
-        temp_file="$(mktemp "$HOME/.bashrc.mihomo.XXXXXX")"
+        temp_file="$(mktemp "$HOME/.bashrc.mihomo.XXXXXX")" || return 1
         awk '
             /^# >>> mihomo-install proxy environment >>>$/ { skip = 1; next }
             /^# <<< mihomo-install proxy environment <<<$/ { skip = 0; next }
             !skip { print }
-        ' "$bashrc_file" > "$temp_file"
-        cat "$temp_file" > "$bashrc_file"
-        rm -f "$temp_file"
+        ' "$bashrc_file" > "$temp_file" || { rm -f "$temp_file"; return 1; }
+        cat "$temp_file" > "$bashrc_file" || { rm -f "$temp_file"; return 1; }
+        rm -f "$temp_file" || return 1
     fi
 
     cat >> "$bashrc_file" <<'EOF'
 
 # >>> mihomo-install proxy environment >>>
-# 仅当 Mihomo 服务确实运行时，新终端才加载代理环境。
+_mihomo_proxy_is_user_owned() {
+    local _mihomo_expected=""
+    if [[ -r "$HOME/mihomo/proxy.env" ]]; then
+        _mihomo_expected="$(sed -n 's/^export http_proxy="\([^"]*\)"$/\1/p' "$HOME/mihomo/proxy.env" | head -n 1)"
+    fi
+    [[ -n "$_mihomo_expected" && "${http_proxy:-}" == "$_mihomo_expected" ]]
+}
+
+# 仅当 Mihomo 服务确实运行时，新终端才加载个人代理环境。
 if systemctl --user is-active --quiet mihomo 2>/dev/null && [[ -r "$HOME/mihomo/proxy.env" ]]; then
     source "$HOME/mihomo/proxy.env"
-else
-    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+    export MIHOMO_PROXY_SCOPE=user
+elif _mihomo_proxy_is_user_owned; then
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY MIHOMO_PROXY_SCOPE
 fi
 
-clashon() {
-    command "$HOME/.local/bin/clashon" "$@" || return $?
-    [[ -r "$HOME/mihomo/proxy.env" ]] && source "$HOME/mihomo/proxy.env"
-}
-
-clash_restart() {
-    command "$HOME/.local/bin/clash_restart" "$@" || return $?
-    [[ -r "$HOME/mihomo/proxy.env" ]] && source "$HOME/mihomo/proxy.env"
-}
-
-clashoff() {
-    command "$HOME/.local/bin/clashoff" "$@" || return $?
-    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+clash() {
+    local _mihomo_action="${1:-help}"
+    local _mihomo_clear_after_off=false
+    if [[ "$_mihomo_action" == "off" ]] && _mihomo_proxy_is_user_owned; then
+        _mihomo_clear_after_off=true
+    fi
+    command "$HOME/.local/bin/clash" "$@" || return $?
+    case "$_mihomo_action" in
+        on|restart)
+            if [[ -r "$HOME/mihomo/proxy.env" ]]; then
+                source "$HOME/mihomo/proxy.env"
+                export MIHOMO_PROXY_SCOPE=user
+            fi
+            ;;
+        off)
+            if [[ "$_mihomo_clear_after_off" == true ]]; then
+                unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY MIHOMO_PROXY_SCOPE
+            fi
+            ;;
+    esac
 }
 # <<< mihomo-install proxy environment <<<
 EOF
-    log_success "已更新 clashon 自动代理环境配置"
+    log_success "已更新 clash 命令的自动代理环境配置"
 }
 
 cleanup_install_temp() {
@@ -487,7 +549,7 @@ prepare_staging_install() {
         write_subscription_url "$STAGING_DIR/config.yaml" || return 1
         configure_random_ports "$STAGING_DIR/config.yaml" || return 1
     else
-        cp -a "$MIHOMO_DIR/config.yaml" "$STAGING_DIR/config.yaml" || return 1
+        cp "$MIHOMO_DIR/config.yaml" "$STAGING_DIR/config.yaml" || return 1
     fi
 
     if [[ -d "$MIHOMO_DIR/providers" ]]; then
@@ -502,25 +564,56 @@ prepare_staging_install() {
         else
             log_warn "Country.mmdb SHA256 校验失败，本次不更新 GeoIP 数据库"
         fi
-    elif [[ -f "$MIHOMO_DIR/Country.mmdb" ]]; then
+    fi
+    if [[ ! -f "$STAGING_DIR/Country.mmdb" && -f "$MIHOMO_DIR/Country.mmdb" ]]; then
         cp -a "$MIHOMO_DIR/Country.mmdb" "$STAGING_DIR/Country.mmdb" || return 1
     fi
+    if [[ ! -f "$STAGING_DIR/Country.mmdb" ]]; then
+        log_error "缺少可用的 Country.mmdb，无法校验包含 GEOIP 规则的配置"
+        return 1
+    fi
 
+    if [[ -f "$PROXY_AUTH_FILE" ]]; then
+        cp "$PROXY_AUTH_FILE" "$STAGING_DIR/proxy-auth" || return 1
+    fi
+    mihomo_ensure_proxy_auth_config "$STAGING_DIR/config.yaml" "$STAGING_DIR/proxy-auth" || {
+        log_error "无法为个人模式配置 HTTP/SOCKS 认证"
+        return 1
+    }
+    chmod 600 "$STAGING_DIR/proxy-auth" || return 1
     ensure_controller_secret "$STAGING_DIR/config.yaml" || return 1
     chmod 600 "$STAGING_DIR/config.yaml" || return 1
     test_mihomo_config "$STAGING_DIR"
 }
 
 snapshot_current_install() {
-    local item
+    local item command_name
     BACKUP_DIR="$(mktemp -d "$HOME/.mihomo-install-backup.XXXXXX")" || return 1
-    for item in mihomo config.yaml Country.mmdb; do
+    [[ -d "$MIHOMO_DIR" ]] && MIHOMO_DIR_WAS_PRESENT=true || MIHOMO_DIR_WAS_PRESENT=false
+    [[ -d "$SERVICE_DIR" ]] && SERVICE_DIR_WAS_PRESENT=true || SERVICE_DIR_WAS_PRESENT=false
+    [[ -d "$COMMAND_DIR" ]] && COMMAND_DIR_WAS_PRESENT=true || COMMAND_DIR_WAS_PRESENT=false
+    [[ -d "$COMMAND_LIB_DIR" ]] && COMMAND_LIB_WAS_PRESENT=true || COMMAND_LIB_WAS_PRESENT=false
+    [[ -e "$HOME/.bashrc" ]] && BASHRC_WAS_PRESENT=true || BASHRC_WAS_PRESENT=false
+
+    for item in mihomo config.yaml Country.mmdb proxy-auth proxy.env .managed-by-mihomo-install; do
         if [[ -e "$MIHOMO_DIR/$item" ]]; then
             cp -a "$MIHOMO_DIR/$item" "$BACKUP_DIR/$item" || return 1
         fi
     done
     if [[ -f "$SERVICE_FILE" ]]; then
         cp -a "$SERVICE_FILE" "$BACKUP_DIR/mihomo.service" || return 1
+    fi
+    if [[ "$BASHRC_WAS_PRESENT" == true ]]; then
+        cp -a "$HOME/.bashrc" "$BACKUP_DIR/bashrc" || return 1
+    fi
+    mkdir -p "$BACKUP_DIR/commands" || return 1
+    for command_name in clash clashon clashoff clash_restart clash_status clash_select; do
+        if [[ -e "$COMMAND_DIR/$command_name" || -L "$COMMAND_DIR/$command_name" ]]; then
+            cp -a "$COMMAND_DIR/$command_name" "$BACKUP_DIR/commands/$command_name" || return 1
+        fi
+    done
+    if [[ "$COMMAND_LIB_WAS_PRESENT" == true ]]; then
+        cp -a "$COMMAND_LIB_DIR" "$BACKUP_DIR/command-lib" || return 1
     fi
     if systemctl --user is-active --quiet mihomo; then
         SERVICE_WAS_ACTIVE=true
@@ -535,10 +628,11 @@ snapshot_current_install() {
 }
 
 rollback_install() {
-    local item
+    local item command_name
     log_warn "正在恢复安装前的核心、配置和服务状态..."
     systemctl --user stop mihomo >/dev/null 2>&1 || true
-    for item in mihomo config.yaml Country.mmdb; do
+    mkdir -p "$MIHOMO_DIR" "$SERVICE_DIR" "$COMMAND_DIR" "$(dirname "$COMMAND_LIB_DIR")" || true
+    for item in mihomo config.yaml Country.mmdb proxy-auth proxy.env .managed-by-mihomo-install; do
         rm -f "$MIHOMO_DIR/$item"
         if [[ -e "$BACKUP_DIR/$item" ]]; then
             cp -a "$BACKUP_DIR/$item" "$MIHOMO_DIR/$item"
@@ -551,15 +645,42 @@ rollback_install() {
     if [[ -f "$BACKUP_DIR/mihomo.service" ]]; then
         cp -a "$BACKUP_DIR/mihomo.service" "$SERVICE_FILE"
     fi
+    for command_name in clash clashon clashoff clash_restart clash_status clash_select; do
+        rm -f "$COMMAND_DIR/$command_name"
+        if [[ -e "$BACKUP_DIR/commands/$command_name" || -L "$BACKUP_DIR/commands/$command_name" ]]; then
+            cp -a "$BACKUP_DIR/commands/$command_name" "$COMMAND_DIR/$command_name"
+        fi
+    done
+    rm -rf -- "$COMMAND_LIB_DIR"
+    if [[ -d "$BACKUP_DIR/command-lib" ]]; then
+        cp -a "$BACKUP_DIR/command-lib" "$COMMAND_LIB_DIR"
+    fi
+    rm -f "$HOME/.bashrc"
+    if [[ -e "$BACKUP_DIR/bashrc" ]]; then
+        cp -a "$BACKUP_DIR/bashrc" "$HOME/.bashrc"
+    fi
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     if [[ "$SERVICE_WAS_ACTIVE" == true ]]; then
         systemctl --user start mihomo >/dev/null 2>&1 || log_warn "旧服务恢复后未能自动启动，请手动检查"
+    fi
+    if [[ "$MIHOMO_DIR_WAS_PRESENT" != true ]]; then
+        rm -rf -- "$MIHOMO_DIR"
+    fi
+    if [[ "$SERVICE_DIR_WAS_PRESENT" != true ]]; then
+        rmdir "$SERVICE_DIR" 2>/dev/null || true
+    fi
+    if [[ "$COMMAND_LIB_WAS_PRESENT" != true ]]; then
+        rmdir "$(dirname "$COMMAND_LIB_DIR")" 2>/dev/null || true
+    fi
+    if [[ "$COMMAND_DIR_WAS_PRESENT" != true ]]; then
+        rmdir "$COMMAND_DIR" 2>/dev/null || true
     fi
     log_warn "已回滚到安装前状态"
 }
 
 commit_staged_install() {
     snapshot_current_install || return 1
+    COMMIT_STARTED=true
     systemctl --user stop mihomo >/dev/null 2>&1 || true
     mkdir -p "$MIHOMO_DIR" "$SERVICE_DIR" || return 1
     chmod 700 "$MIHOMO_DIR" || return 1
@@ -571,6 +692,12 @@ commit_staged_install() {
     mv -f "$STAGING_DIR/config.yaml" "$MIHOMO_DIR/.config.yaml.new" || return 1
     chmod 600 "$MIHOMO_DIR/.config.yaml.new" || return 1
     mv -f "$MIHOMO_DIR/.config.yaml.new" "$MIHOMO_DIR/config.yaml" || return 1
+
+    mv -f "$STAGING_DIR/proxy-auth" "$MIHOMO_DIR/.proxy-auth.new" || return 1
+    chmod 600 "$MIHOMO_DIR/.proxy-auth.new" || return 1
+    mv -f "$MIHOMO_DIR/.proxy-auth.new" "$PROXY_AUTH_FILE" || return 1
+    printf '%s\n' '# Managed by mihomo-install' > "$MIHOMO_DIR/.managed-by-mihomo-install" || return 1
+    chmod 600 "$MIHOMO_DIR/.managed-by-mihomo-install" || return 1
 
     if [[ -f "$STAGING_DIR/Country.mmdb" ]]; then
         mv -f "$STAGING_DIR/Country.mmdb" "$MIHOMO_DIR/Country.mmdb" || return 1
@@ -587,10 +714,17 @@ main() {
     BACKUP_DIR=""
     SERVICE_WAS_ACTIVE=false
     SERVICE_WAS_ENABLED=false
+    MIHOMO_DIR_WAS_PRESENT=false
+    SERVICE_DIR_WAS_PRESENT=false
+    COMMAND_DIR_WAS_PRESENT=false
+    COMMAND_LIB_WAS_PRESENT=false
+    BASHRC_WAS_PRESENT=false
+    COMMIT_STARTED=false
 
     ensure_x86_64
     require_commands
     require_project_files
+    load_project_libraries
 
     if [[ -d "$MIHOMO_DIR" ]]; then
         read -r -p "$MIHOMO_DIR 已存在，是否继续更新 Mihomo 核心？[y/N]: " choice
@@ -606,7 +740,7 @@ main() {
         if [[ "$choice" =~ ^[Yy]$ ]]; then
             UPDATE_CONFIG=true
         else
-            log_info "保留现有 config.yaml，不会修改订阅链接或端口"
+            log_info "保留现有订阅链接和端口；仅补齐个人代理认证等安全配置"
         fi
     else
         UPDATE_CONFIG=true
@@ -616,7 +750,7 @@ main() {
         prompt_subscription_url
     fi
 
-    STAGING_DIR="$(mktemp -d "$HOME/.mihomo-install-stage.XXXXXX")"
+    STAGING_DIR="$(mktemp -d "$HOME/.mihomo-install-stage.XXXXXX")" || return 1
     trap 'cleanup_install_temp "${STAGING_DIR:-}"; cleanup_install_temp "${BACKUP_DIR:-}"' EXIT
 
     if ! prepare_staging_install; then
@@ -625,26 +759,28 @@ main() {
     fi
 
     if ! commit_staged_install; then
-        if [[ -n "$BACKUP_DIR" ]]; then
+        if [[ "$COMMIT_STARTED" == true ]]; then
             rollback_install
         fi
         log_error "安装失败，已恢复安装前状态"
         return 1
     fi
-    write_proxy_environment
-    if ! create_service_commands; then
+    if ! write_proxy_environment || ! create_service_commands || ! configure_command_path; then
+        rollback_install
+        log_error "安装集成失败，已恢复安装前状态"
         return 1
     fi
-    configure_command_path
     if [[ -t 0 ]]; then
-        "$COMMAND_DIR/clash_select" || log_warn "首次节点选择未完成，稍后可执行 clash_select"
+        "$COMMAND_DIR/clash" select || log_warn "首次节点选择未完成，稍后可执行 clash select"
     fi
 
     echo
     log_success "安装完成：$MIHOMO_DIR \n"
     log_info "配置文件：$MIHOMO_DIR/config.yaml"
-    log_info "服务管理：clashon（服务启动）、clashoff（服务关闭）、clash_select（订阅节点选择）、clash_restart（服务重启）、clash_status（服务状态） \n"
+    log_info "服务管理：clash on、clash off、clash select、clash restart、clash status、clash auth、clash help \n"
     log_info "安装完成请执行 source ~/.bashrc && curl -I https://www.google.com 命令来加载并验证是否成功\n"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

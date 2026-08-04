@@ -37,7 +37,7 @@ Mihomo 系统共享模式帮助
 说明：
   1. on/off 只修改当前 shell 的 HTTP/HTTPS 代理变量，不会启动或停止共享服务。
   2. 如果安装时启用了自动代理，没有个人 Mihomo 的用户下次登录 Bash 后无需执行 on。
-  3. 同时存在个人代理时，当前终端最后执行的 clashon 或 clashsys on 生效。
+  3. 同时存在个人代理时，当前终端最后执行的 clash on 或 clashsys on 生效。
   4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/restart。
 
 示例：
@@ -92,7 +92,7 @@ select_node() {
 
     group_uri="$(jq -rn --arg value "$GROUP_NAME" '$value | @uri')"
     api_url="${CONTROLLER_URL}/proxies/${group_uri}"
-    response="$(curl -fsS --noproxy 127.0.0.1 "${CURL_AUTH_ARGS[@]}" "$api_url")" || {
+    response="$(curl -fsS --noproxy '127.0.0.1,localhost,::1' "${CURL_AUTH_ARGS[@]}" "$api_url")" || {
         echo "无法连接系统 Mihomo 控制接口。" >&2
         return 1
     }
@@ -112,7 +112,7 @@ select_node() {
     echo "当前共享节点：${current:-未选择}"
     echo "正在检测 ${node_count} 个节点的延迟（超时 ${DELAY_TIMEOUT_MS} ms）..."
     delay_response="$(
-        curl -fsS --noproxy 127.0.0.1 --max-time "$curl_max_time" "${CURL_AUTH_ARGS[@]}" \
+        curl -fsS --noproxy '127.0.0.1,localhost,::1' --max-time "$curl_max_time" "${CURL_AUTH_ARGS[@]}" \
             --get \
             --data-urlencode "url=${DELAY_TEST_URL}" \
             --data-urlencode "timeout=${DELAY_TIMEOUT_MS}" \
@@ -197,7 +197,7 @@ select_node() {
         fi
 
         payload="$(jq -n --arg name "$node" '{name: $name}')"
-        if ! curl -fsS --noproxy 127.0.0.1 "${CURL_AUTH_ARGS[@]}" -X PUT -H 'Content-Type: application/json' -d "$payload" "$api_url" >/dev/null; then
+        if ! curl -fsS --noproxy '127.0.0.1,localhost,::1' "${CURL_AUTH_ARGS[@]}" -X PUT -H 'Content-Type: application/json' -d "$payload" "$api_url" >/dev/null; then
             echo "共享节点切换失败，请重新选择或查看系统日志。" >&2
             continue
         fi

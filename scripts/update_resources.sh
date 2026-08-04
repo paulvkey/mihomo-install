@@ -17,22 +17,8 @@ BIN_PREFIX="mihomo-linux-amd64-v2-v"
 BIN_SUFFIX=".gz"
 RELEASE_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 RELEASE_PAGE="https://github.com/MetaCubeX/mihomo/releases/latest"
+GITHUB_LIB="$PROJECT_DIR/scripts/lib/github.sh"
 
-# 镜像地址为 GitHub URL 前缀；最后的空字符串表示 GitHub 原始地址。
-GITHUB_MIRRORS=(
-    "https://ghfast.top/"
-    "https://gh-proxy.com/"
-    "https://ghproxy.net/"
-    "https://mirror.ghproxy.com/"
-    ""
-)
-GITHUB_METADATA_MIRRORS=(
-    ""
-    "https://ghfast.top/"
-    "https://gh-proxy.com/"
-    "https://ghproxy.net/"
-    "https://mirror.ghproxy.com/"
-)
 CURL_RETRY_ARGS=(--retry 2)
 RESOURCE_TEMP_FILE=""
 
@@ -50,6 +36,13 @@ require_commands() {
         fi
     done
     (( missing == 0 )) || return 1
+    if [[ ! -f "$GITHUB_LIB" ]]; then
+        log_error "项目文件缺失：$GITHUB_LIB"
+        return 1
+    fi
+    # shellcheck source=/dev/null
+    source "$GITHUB_LIB"
+    mihomo_validate_github_config || return 1
     if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
         log_error "缺少 SHA256 校验工具：需要 sha256sum 或 shasum"
         return 1
@@ -114,13 +107,53 @@ valid_bin() {
     gzip -dc "$file" 2>/dev/null | grep -aF "v${version}" >/dev/null
 }
 
+# 先准备数据和校验文件，再分别原子替换；第二步失败时恢复原数据文件。
+commit_resource_pair() {
+    local new_file="$1" target="$2" expected_sha="$3"
+    local checksum_target="${target}.sha256" checksum_temp backup_file=""
+
+    if [[ -L "$target" || -L "$checksum_target" ]]; then
+        log_error "资源目标是符号链接，拒绝覆盖：$target"
+        return 1
+    fi
+    checksum_temp="$(mktemp "$(dirname "$target")/.resource-checksum.XXXXXX")" || return 1
+    printf '%s  %s\n' "$expected_sha" "$(basename "$target")" > "$checksum_temp" \
+        || { rm -f "$checksum_temp"; return 1; }
+    chmod 644 "$new_file" "$checksum_temp" || { rm -f "$checksum_temp"; return 1; }
+
+    if [[ -f "$target" ]]; then
+        backup_file="$(mktemp "$(dirname "$target")/.resource-backup.XXXXXX")" || {
+            rm -f "$checksum_temp"
+            return 1
+        }
+        cp -p "$target" "$backup_file" || {
+            rm -f "$checksum_temp" "$backup_file"
+            return 1
+        }
+    fi
+
+    if ! mv "$new_file" "$target"; then
+        rm -f "$checksum_temp" "$backup_file"
+        return 1
+    fi
+    RESOURCE_TEMP_FILE=""
+    if ! mv "$checksum_temp" "$checksum_target"; then
+        rm -f "$target"
+        if [[ -n "$backup_file" ]]; then
+            mv "$backup_file" "$target" || log_error "恢复旧资源失败：$target"
+        fi
+        return 1
+    fi
+    rm -f "$backup_file"
+}
+
 download_via_mirrors() {
     local url="$1" output="$2" description="$3" kind="$4" version="$5" expected_sha="${6:-}"
     local mirror candidate
     for mirror in "${GITHUB_MIRRORS[@]}"; do
         candidate="${mirror}${url}"
         log_info "尝试下载 ${description}：${candidate}"
-        if curl -fL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 300 -o "$output" "$candidate"; then
+        if curl -fL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_DOWNLOAD_TIMEOUT" -o "$output" "$candidate"; then
             if [[ "$kind" == geoip ]] && valid_geoip "$output" "$expected_sha"; then
                 log_success "下载成功：${description}"
                 return 0
@@ -146,9 +179,7 @@ update_geoip() {
     RESOURCE_TEMP_FILE="$temp_file"
     trap 'rm -f "${RESOURCE_TEMP_FILE:-}"' EXIT
     if download_via_mirrors "$asset_url" "$temp_file" "最新 Country.mmdb" geoip "" "$expected_sha"; then
-        mv "$temp_file" "$GEOIP_OUTPUT" || return 1
-        printf '%s  %s\n' "$expected_sha" "$(basename "$GEOIP_OUTPUT")" > "${GEOIP_OUTPUT}.sha256" || return 1
-        chmod 644 "${GEOIP_OUTPUT}.sha256" || return 1
+        commit_resource_pair "$temp_file" "$GEOIP_OUTPUT" "$expected_sha" || return 1
         trap - EXIT
         RESOURCE_TEMP_FILE=""
         log_success "已更新：$GEOIP_OUTPUT"
@@ -163,11 +194,12 @@ update_geoip() {
 get_geoip_release_metadata() {
     local mirror response asset_url digest expected_sha
     for mirror in "${GITHUB_METADATA_MIRRORS[@]}"; do
-        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 90 "${mirror}${GEOIP_RELEASE_API}" 2>/dev/null)"; then
+        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_METADATA_TIMEOUT" "${mirror}${GEOIP_RELEASE_API}" 2>/dev/null)"; then
             asset_url="$(jq -r '.assets[] | select(.name == "country.mmdb") | .browser_download_url // empty' <<< "$response")"
             digest="$(jq -r '.assets[] | select(.name == "country.mmdb") | .digest // empty' <<< "$response")"
             expected_sha="${digest#sha256:}"
             if [[ -n "$asset_url" && "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                mihomo_warn_mirror_metadata "$mirror"
                 printf '%s\t%s\n' "$asset_url" "$expected_sha"
                 return 0
             fi
@@ -181,19 +213,21 @@ get_latest_version() {
     local mirror version response html
     for mirror in "${GITHUB_METADATA_MIRRORS[@]}"; do
         # 优先走 GitHub API
-        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 90 "${mirror}${RELEASE_API}" 2>/dev/null)" \
+        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_METADATA_TIMEOUT" "${mirror}${RELEASE_API}" 2>/dev/null)" \
             && grep -q '"tag_name"' <<< "$response"; then
             version="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$response" | head -n 1)"
             if [[ -n "$version" ]] && normalize_version "$version"; then
+                mihomo_warn_mirror_metadata "$mirror"
                 echo "$version"
                 return 0
             fi
         fi
         # API 不可用（限流等）时，退化为解析 releases/latest 页面
-        if html="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 90 "${mirror}${RELEASE_PAGE}" 2>/dev/null)" \
+        if html="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_METADATA_TIMEOUT" "${mirror}${RELEASE_PAGE}" 2>/dev/null)" \
             && grep -q 'releases/tag/v' <<< "$html"; then
             version="$(grep -oE 'releases/tag/v[0-9][^"&]*' <<< "$html" | head -n 1 | sed 's|releases/tag/||')"
             if [[ -n "$version" ]] && normalize_version "$version"; then
+                mihomo_warn_mirror_metadata "$mirror"
                 echo "$version"
                 return 0
             fi
@@ -206,11 +240,12 @@ get_latest_version() {
 get_bin_release_metadata() {
     local version="$1" mirror response asset_url digest expected_sha
     for mirror in "${GITHUB_METADATA_MIRRORS[@]}"; do
-        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 90 "${mirror}https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v${version}" 2>/dev/null)"; then
+        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_METADATA_TIMEOUT" "${mirror}https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v${version}" 2>/dev/null)"; then
             asset_url="$(jq -r --arg name "${BIN_PREFIX}${version}${BIN_SUFFIX}" '.assets[] | select(.name == $name) | .browser_download_url // empty' <<< "$response")"
             digest="$(jq -r --arg name "${BIN_PREFIX}${version}${BIN_SUFFIX}" '.assets[] | select(.name == $name) | .digest // empty' <<< "$response")"
             expected_sha="${digest#sha256:}"
             if [[ -n "$asset_url" && "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                mihomo_warn_mirror_metadata "$mirror"
                 printf '%s\t%s\n' "$asset_url" "$expected_sha"
                 return 0
             fi
@@ -235,21 +270,19 @@ update_bin() {
     if download_via_mirrors \
         "$asset_url" "$temp_file" "mihomo 核心 v${version}" bin "$version" "$expected_sha"; then
 
-        # 删除同系列旧安装包，只保留本次版本
+        commit_resource_pair "$temp_file" "$BIN_DIR/$asset" "$expected_sha" || return 1
+
+        # 新资源和校验文件都提交成功后，才删除同系列旧安装包。
         shopt -s nullglob
         for old in "$BIN_DIR"/mihomo-linux-amd64-v2-*.gz; do
             [[ "$(basename "$old")" == "$asset" ]] && continue
-            rm -f "$old"
-            rm -f "${old}.sha256"
+            rm -f "$old" || { shopt -u nullglob; return 1; }
+            rm -f "${old}.sha256" || { shopt -u nullglob; return 1; }
             log_info "已移除旧安装包：$(basename "$old")"
             removed=1
         done
         shopt -u nullglob
 
-        mv "$temp_file" "$BIN_DIR/$asset" || return 1
-        chmod 644 "$BIN_DIR/$asset" || return 1
-        printf '%s  %s\n' "$expected_sha" "$asset" > "$BIN_DIR/${asset}.sha256" || return 1
-        chmod 644 "$BIN_DIR/${asset}.sha256" || return 1
         trap - EXIT
         RESOURCE_TEMP_FILE=""
         log_success "已更新：$BIN_DIR/$asset"

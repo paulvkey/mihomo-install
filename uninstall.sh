@@ -7,11 +7,29 @@ MIHOMO_DIR="$HOME/mihomo"
 SERVICE_FILE="$HOME/.config/systemd/user/mihomo.service"
 COMMAND_DIR="$HOME/.local/bin"
 COMMAND_LIB_DIR="$HOME/.local/lib/mihomo-install"
+MANAGED_MARKER="$MIHOMO_DIR/.managed-by-mihomo-install"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+
+if [[ -L "$SERVICE_FILE" ]]; then
+    echo "拒绝卸载：$SERVICE_FILE 是符号链接。" >&2
+    exit 1
+fi
+if [[ -e "$SERVICE_FILE" ]] \
+    && ! grep -Fq '# Managed by mihomo-install' "$SERVICE_FILE" \
+    && ! grep -Fq "ExecStart=$MIHOMO_DIR/mihomo -d $MIHOMO_DIR" "$SERVICE_FILE"; then
+    echo "拒绝卸载：$SERVICE_FILE 不是本项目管理的服务。" >&2
+    exit 1
+fi
+if [[ -d "$MIHOMO_DIR" ]] \
+    && [[ ! -f "$MANAGED_MARKER" ]] \
+    && [[ ! -f "$SERVICE_FILE" ]]; then
+    echo "拒绝删除：$MIHOMO_DIR 缺少项目管理标记，且没有可识别的旧版服务文件。" >&2
+    exit 1
+fi
 
 echo -e "${YELLOW}即将删除以下当前用户资源：${NC}"
 echo "  - $MIHOMO_DIR"
@@ -28,15 +46,17 @@ else
     log_warn "Mihomo 用户服务未运行或用户 systemd 不可用"
 fi
 
-if [[ -f "$SERVICE_FILE" ]]; then
+if [[ -f "$SERVICE_FILE" ]] \
+    && { grep -Fq '# Managed by mihomo-install' "$SERVICE_FILE" \
+        || grep -Fq "ExecStart=$MIHOMO_DIR/mihomo -d $MIHOMO_DIR" "$SERVICE_FILE"; }; then
     rm -f "$SERVICE_FILE"
     log_success "已删除用户服务文件"
 fi
 systemctl --user daemon-reload 2>/dev/null || true
 
-for command in clashon clashoff clash_restart clash_status clash_select; do
+for command in clash clashon clashoff clash_restart clash_status clash_select; do
     command_file="$COMMAND_DIR/$command"
-    if [[ -f "$command_file" ]] && grep -q '^# Managed by mihomo-install$' "$command_file"; then
+    if [[ -f "$command_file" ]] && grep -Eq '^# (Managed by mihomo-install|交互选择 Mihomo 的 PROXY 代理组节点。)$' "$command_file"; then
         rm -f "$command_file"
         log_success "已删除命令：$command"
     fi
@@ -44,7 +64,7 @@ done
 
 bashrc_file="$HOME/.bashrc"
 if [[ -f "$bashrc_file" ]] && grep -Fqx '# >>> mihomo-install proxy environment >>>' "$bashrc_file"; then
-    temp_file="$(mktemp "${bashrc_file}.XXXXXX")"
+    temp_file="$(mktemp "${bashrc_file}.XXXXXX")" || exit 1
     awk '
         /^# >>> mihomo-install proxy environment >>>$/ { skip = 1; next }
         /^# <<< mihomo-install proxy environment <<<$/ { skip = 0; next }
@@ -55,14 +75,24 @@ if [[ -f "$bashrc_file" ]] && grep -Fqx '# >>> mihomo-install proxy environment 
     log_success "已移除 ~/.bashrc 中的 Mihomo 代理加载函数"
 fi
 
-if [[ -f "$COMMAND_LIB_DIR/common.sh" ]] && grep -q '用户级 Mihomo 服务与端口管理函数' "$COMMAND_LIB_DIR/common.sh"; then
-    rm -f "$COMMAND_LIB_DIR/common.sh"
+if [[ -f "$COMMAND_LIB_DIR/.managed-by-mihomo-install" ]]; then
+    rm -rf -- "$COMMAND_LIB_DIR"
+else
+    for command_component in ports.sh user_auth.sh common.sh clashon.sh clashoff.sh clash_restart.sh clash_status.sh clash_select.sh clash_auth.sh; do
+        component_file="$COMMAND_LIB_DIR/$command_component"
+        if [[ -f "$component_file" ]] && grep -Eq '(Managed by mihomo-install|Mihomo 安装脚本共用|个人模式 HTTP/SOCKS|用户级 Mihomo 服务与端口管理函数|交互选择 Mihomo 的 PROXY 代理组节点。)' "$component_file"; then
+            rm -f "$component_file"
+        fi
+    done
     rmdir "$COMMAND_LIB_DIR" 2>/dev/null || true
-    log_success "已删除 Mihomo 命令公共库"
 fi
+log_success "已清理 Mihomo 命令组件"
 
 if [[ -d "$MIHOMO_DIR" ]]; then
-    rm -rf "$MIHOMO_DIR"
+    case "$MIHOMO_DIR" in
+        "$HOME/mihomo") rm -rf -- "$MIHOMO_DIR" ;;
+        *) echo "拒绝删除非预期目录：$MIHOMO_DIR" >&2; exit 1 ;;
+    esac
     log_success "已删除 $MIHOMO_DIR"
 else
     log_warn "未找到 $MIHOMO_DIR"

@@ -5,6 +5,10 @@ allow-lan: false
 bind-address: 127.0.0.1
 mode: rule
 log-level: info
+ipv6: true
+# 使用随项目安装的 Country.mmdb，而不是 geoip.dat。
+geodata-mode: false
+geo-auto-update: false
 external-controller: 127.0.0.1:9090
 # install.sh 会在安装副本中写入随机 secret；仓库模板不保存真实密钥。
 
@@ -15,8 +19,10 @@ dns:
   enable: true
   # 普通用户不能绑定 1024 以下端口；如需 53 端口，请由管理员另行配置。
   listen: 127.0.0.1:1053
+  ipv6: true
   nameserver:
-    - 8.8.8.8
+    - system
+    - 223.5.5.5
     - 1.1.1.1
 
 proxy-providers:
@@ -41,8 +47,12 @@ proxy-groups:
 
 rules:
   - DOMAIN-SUFFIX,local,DIRECT
-  - IP-CIDR,127.0.0.0/8,DIRECT
-  - IP-CIDR,172.16.0.0/12,DIRECT
-  - IP-CIDR,192.168.0.0/16,DIRECT
-  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR6,::1/128,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+  - GEOIP,CN,DIRECT,no-resolve
   - MATCH,PROXY

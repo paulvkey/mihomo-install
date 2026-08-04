@@ -14,6 +14,8 @@ PROFILE_SOURCE="$SYSTEM_DIR/profile.d/mihomo-system.sh"
 AUTO_PROFILE_SOURCE="$SYSTEM_DIR/profile.d/zz-mihomo-system-auto.sh"
 SERVICE_SOURCE="$SYSTEM_DIR/mihomo-system.service"
 SUDOERS_SOURCE="$SYSTEM_DIR/sudoers/mihomo-system"
+PORTS_LIB="$PROJECT_DIR/scripts/lib/ports.sh"
+GITHUB_LIB="$PROJECT_DIR/scripts/lib/github.sh"
 
 SERVICE_USER="mihomo"
 SERVICE_GROUP="mihomo"
@@ -32,20 +34,6 @@ AUTO_PROFILE_FILE="/etc/profile.d/zz-mihomo-system-auto.sh"
 SUDOERS_FILE="/etc/sudoers.d/mihomo-system"
 SERVICE_NAME="mihomo-system.service"
 
-GITHUB_MIRRORS=(
-    "https://ghfast.top/"
-    "https://gh-proxy.com/"
-    "https://ghproxy.net/"
-    "https://mirror.ghproxy.com/"
-    ""
-)
-GITHUB_METADATA_MIRRORS=(
-    ""
-    "https://ghfast.top/"
-    "https://gh-proxy.com/"
-    "https://ghproxy.net/"
-    "https://mirror.ghproxy.com/"
-)
 CURL_RETRY_ARGS=(--retry 2)
 DOWNLOADED_ARCHIVE=""
 STAGING_DIR=""
@@ -56,6 +44,12 @@ COMMIT_STARTED=false
 CONTROL_USERS_INPUT=""
 CONTROL_USERS_ADDED=""
 AUTO_ENABLE_SYSTEM_PROXY=false
+SERVICE_USER_CREATED=false
+SERVICE_GROUP_CREATED=false
+CONTROL_GROUP_CREATED=false
+CORE_DIR_WAS_PRESENT=false
+CONFIG_DIR_WAS_PRESENT=false
+STATE_DIR_WAS_PRESENT=false
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -85,7 +79,7 @@ require_root_linux() {
 require_commands() {
     local command_name missing=0
     for command_name in bash curl gzip jq systemctl journalctl awk sed grep sort mktemp wc od tr \
-        getent groupadd useradd usermod install sudo visudo; do
+        getent groupadd groupdel useradd userdel usermod gpasswd id install chown sudo visudo head; do
         if ! command -v "$command_name" >/dev/null 2>&1; then
             log_error "缺少依赖命令：$command_name"
             missing=1
@@ -107,7 +101,7 @@ require_commands() {
 
 require_project_files() {
     local file
-    for file in "$CONFIG_TEMPLATE" "$COMMAND_SOURCE" "$PROFILE_SOURCE" "$AUTO_PROFILE_SOURCE" "$SERVICE_SOURCE" "$SUDOERS_SOURCE"; do
+    for file in "$CONFIG_TEMPLATE" "$RESOURCE_DIR/Country.mmdb" "$RESOURCE_DIR/Country.mmdb.sha256" "$COMMAND_SOURCE" "$PROFILE_SOURCE" "$AUTO_PROFILE_SOURCE" "$SERVICE_SOURCE" "$SUDOERS_SOURCE" "$PORTS_LIB" "$GITHUB_LIB"; do
         if [[ ! -f "$file" ]]; then
             log_error "项目文件缺失：$file"
             return 1
@@ -117,6 +111,57 @@ require_project_files() {
         log_error "sudoers 模板校验失败：$SUDOERS_SOURCE"
         return 1
     fi
+    # shellcheck source=/dev/null
+    source "$PORTS_LIB"
+    # shellcheck source=/dev/null
+    source "$GITHUB_LIB"
+    mihomo_validate_github_config
+}
+
+preflight_system_targets() {
+    local target managed_install=false
+    local -a directories=("$CORE_DIR" "$CONFIG_DIR" "$STATE_DIR")
+    local -a files=(
+        "$CORE_FILE" "$CONFIG_FILE" "$PROXY_ENV_FILE" "$MANAGED_MARKER" "$STATE_DIR/Country.mmdb"
+        "$SERVICE_FILE" "$COMMAND_FILE" "$PROFILE_FILE" "$AUTO_PROFILE_FILE" "$SUDOERS_FILE"
+    )
+
+    if [[ -L "$MANAGED_MARKER" ]]; then
+        log_error "$MANAGED_MARKER 是符号链接，拒绝继续"
+        return 1
+    fi
+    if [[ -f "$MANAGED_MARKER" ]] && grep -Fq 'mihomo-install system mode' "$MANAGED_MARKER"; then
+        managed_install=true
+    fi
+
+    for target in "${directories[@]}" "${files[@]}"; do
+        if [[ -L "$target" ]]; then
+            log_error "$target 是符号链接，为避免覆盖非预期位置而终止"
+            return 1
+        fi
+    done
+    for target in "${directories[@]}"; do
+        if [[ -e "$target" && ! -d "$target" ]]; then
+            log_error "$target 已存在但不是目录，拒绝继续"
+            return 1
+        fi
+    done
+    for target in "${files[@]}"; do
+        if [[ -e "$target" && ! -f "$target" ]]; then
+            log_error "$target 已存在但不是普通文件，拒绝继续"
+            return 1
+        fi
+    done
+    if [[ "$managed_install" == true ]]; then
+        return 0
+    fi
+
+    for target in "${directories[@]}" "${files[@]}"; do
+        if [[ -e "$target" || -L "$target" ]]; then
+            log_error "$target 已存在，但没有有效的项目管理标记；为避免覆盖而终止"
+            return 1
+        fi
+    done
 }
 
 calculate_sha256() {
@@ -139,8 +184,9 @@ fetch_release_json() {
     local mirror response
     for mirror in "${GITHUB_METADATA_MIRRORS[@]}"; do
         log_info "尝试查询 Mihomo Release：${mirror}${url}"
-        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 90 "${mirror}${url}")" \
+        if response="$(curl -fsSL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_METADATA_TIMEOUT" "${mirror}${url}")" \
             && grep -q '"browser_download_url"' <<< "$response"; then
+            mihomo_warn_mirror_metadata "$mirror"
             RELEASE_JSON="$response"
             return 0
         fi
@@ -160,17 +206,17 @@ download_core() {
         return 1
     fi
 
-    DOWNLOADED_ARCHIVE="$(mktemp "$target_dir/.mihomo-download.XXXXXX.gz")"
+    DOWNLOADED_ARCHIVE="$(mktemp "$target_dir/.mihomo-download.XXXXXX.gz")" || return 1
     for mirror in "${GITHUB_MIRRORS[@]}"; do
         candidate="${mirror}${url}"
         log_info "尝试下载系统核心：$candidate"
-        if curl -fL "${CURL_RETRY_ARGS[@]}" --connect-timeout 10 --max-time 300 -o "$DOWNLOADED_ARCHIVE" "$candidate" \
+        if curl -fL "${CURL_RETRY_ARGS[@]}" --connect-timeout "$MIHOMO_CURL_CONNECT_TIMEOUT" --max-time "$MIHOMO_CURL_DOWNLOAD_TIMEOUT" -o "$DOWNLOADED_ARCHIVE" "$candidate" \
             && valid_gzip "$DOWNLOADED_ARCHIVE" "$expected_sha"; then
             log_success "系统核心下载完成并通过 SHA256 校验"
             return 0
         fi
         rm -f "$DOWNLOADED_ARCHIVE"
-        DOWNLOADED_ARCHIVE="$(mktemp "$target_dir/.mihomo-download.XXXXXX.gz")"
+        DOWNLOADED_ARCHIVE="$(mktemp "$target_dir/.mihomo-download.XXXXXX.gz")" || return 1
     done
     log_error "所有镜像均无法下载系统核心"
     return 1
@@ -204,35 +250,9 @@ install_core_to_staging() {
     chmod 755 "$STAGING_DIR/mihomo" || return 1
 }
 
-port_in_use() {
-    local port="$1"
-    if command -v ss >/dev/null 2>&1; then
-        ss -ltnuH 2>/dev/null | awk -v port="$port" '$5 ~ ":" port "$" {found = 1} END {exit !found}'
-    else
-        netstat -ltnu 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" {found = 1} END {exit !found}'
-    fi
-}
-
 random_available_port() {
-    local candidate selected_port already_chosen
-    for _ in {1..200}; do
-        # 与个人模式的 20000-59999 分开，避免服务先后启动时发生跨模式端口冲突。
-        candidate=$((10000 + RANDOM % 10000))
-        already_chosen=false
-        for selected_port in "$@"; do
-            if [[ "$selected_port" == "$candidate" ]]; then
-                already_chosen=true
-                break
-            fi
-        done
-        [[ "$already_chosen" == true ]] && continue
-        if ! port_in_use "$candidate"; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-    log_error "无法在 10000-19999 范围内为系统服务分配可用端口"
-    return 1
+    # 与个人模式的 20000-59999 分开，避免服务先后启动时发生跨模式端口冲突。
+    mihomo_random_available_port 10000 19999 "$@"
 }
 
 configure_random_ports() {
@@ -301,7 +321,7 @@ write_subscription() {
 prompt_subscription() {
     local value
     while true; do
-        read -r -p "请输入系统共享 Clash/Mihomo 订阅链接: " value
+        read -r -p "请输入系统共享 Clash/Mihomo 订阅链接（以 http:// 或 https:// 开头）: " value
         if [[ "$value" =~ ^https?:// ]]; then
             SUBSCRIPTION_URL="$value"
             return 0
@@ -387,6 +407,10 @@ stage_country_database() {
     if [[ -f "$STATE_DIR/Country.mmdb" ]]; then
         cp -a "$STATE_DIR/Country.mmdb" "$STAGING_DIR/Country.mmdb" || return 1
     fi
+    if [[ ! -f "$STAGING_DIR/Country.mmdb" ]]; then
+        log_error "缺少可用的 Country.mmdb，无法校验包含 GEOIP 规则的系统配置"
+        return 1
+    fi
 }
 
 prepare_staging() {
@@ -409,24 +433,52 @@ prepare_staging() {
 }
 
 ensure_system_accounts() {
-    local nologin_shell control_user
+    local nologin_shell control_user service_gid user_gid user_home user_shell
+    local service_group_exists=false service_user_exists=false
     local -a control_users
-    if ! getent group "$SERVICE_GROUP" >/dev/null; then
-        groupadd --system "$SERVICE_GROUP" || return 1
+
+    getent group "$SERVICE_GROUP" >/dev/null && service_group_exists=true
+    getent passwd "$SERVICE_USER" >/dev/null && service_user_exists=true
+    if [[ "$service_group_exists" != "$service_user_exists" ]]; then
+        log_error "检测到只有 ${SERVICE_USER} 用户或 ${SERVICE_GROUP} 组单独存在，无法确认归属，拒绝复用"
+        return 1
     fi
-    if ! getent passwd "$SERVICE_USER" >/dev/null; then
+
+    if [[ "$service_group_exists" != true ]]; then
+        groupadd --system "$SERVICE_GROUP" || return 1
+        SERVICE_GROUP_CREATED=true
+    fi
+    if [[ "$service_user_exists" != true ]]; then
         nologin_shell="$(command -v nologin || true)"
         [[ -n "$nologin_shell" ]] || nologin_shell="/usr/sbin/nologin"
         useradd --system --gid "$SERVICE_GROUP" --home-dir "$STATE_DIR" --shell "$nologin_shell" "$SERVICE_USER" || return 1
+        SERVICE_USER_CREATED=true
+    else
+        service_gid="$(getent group "$SERVICE_GROUP" | awk -F: 'NR == 1 {print $3}')"
+        IFS=: read -r _ _ _ user_gid _ user_home user_shell < <(getent passwd "$SERVICE_USER" | head -n 1)
+        if [[ -z "$service_gid" || "$user_gid" != "$service_gid" || "$user_home" != "$STATE_DIR" ]]; then
+            log_error "现有 ${SERVICE_USER} 账户的主组或 Home 与项目要求不一致，拒绝复用"
+            return 1
+        fi
+        case "$user_shell" in
+            */nologin|*/false) ;;
+            *)
+                log_error "现有 ${SERVICE_USER} 账户不是禁止登录的服务账户，拒绝复用"
+                return 1
+                ;;
+        esac
     fi
     if ! getent group "$CONTROL_GROUP" >/dev/null; then
         groupadd --system "$CONTROL_GROUP" || return 1
+        CONTROL_GROUP_CREATED=true
     fi
     if [[ -n "$CONTROL_USERS_INPUT" ]]; then
         IFS=' ' read -r -a control_users <<< "$CONTROL_USERS_INPUT"
         for control_user in "${control_users[@]}"; do
-            usermod -aG "$CONTROL_GROUP" "$control_user" || return 1
-            CONTROL_USERS_ADDED="${CONTROL_USERS_ADDED:+$CONTROL_USERS_ADDED }$control_user"
+            if ! id -nG "$control_user" | tr ' ' '\n' | grep -Fxq "$CONTROL_GROUP"; then
+                usermod -aG "$CONTROL_GROUP" "$control_user" || return 1
+                CONTROL_USERS_ADDED="${CONTROL_USERS_ADDED:+$CONTROL_USERS_ADDED }$control_user"
+            fi
         done
     fi
 }
@@ -439,7 +491,10 @@ snapshot_file() {
 }
 
 snapshot_installation() {
-    BACKUP_DIR="$(mktemp -d /var/tmp/mihomo-system-backup.XXXXXX)"
+    BACKUP_DIR="$(mktemp -d /var/tmp/mihomo-system-backup.XXXXXX)" || return 1
+    [[ -d "$CORE_DIR" ]] && CORE_DIR_WAS_PRESENT=true || CORE_DIR_WAS_PRESENT=false
+    [[ -d "$CONFIG_DIR" ]] && CONFIG_DIR_WAS_PRESENT=true || CONFIG_DIR_WAS_PRESENT=false
+    [[ -d "$STATE_DIR" ]] && STATE_DIR_WAS_PRESENT=true || STATE_DIR_WAS_PRESENT=false
     snapshot_file "$CORE_FILE" core || return 1
     snapshot_file "$CONFIG_FILE" config.yaml || return 1
     snapshot_file "$PROXY_ENV_FILE" proxy.env || return 1
@@ -464,6 +519,8 @@ restore_file() {
 }
 
 rollback_installation() {
+    local control_user
+    local -a control_users=()
     log_warn "正在恢复安装前的系统级 Mihomo..."
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     restore_file core "$CORE_FILE"
@@ -485,21 +542,49 @@ rollback_installation() {
     if [[ "$SERVICE_WAS_ACTIVE" == true ]]; then
         systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || log_warn "旧系统服务未能自动恢复，请检查日志"
     fi
+    if [[ -n "$CONTROL_USERS_ADDED" ]]; then
+        IFS=' ' read -r -a control_users <<< "$CONTROL_USERS_ADDED"
+        for control_user in "${control_users[@]}"; do
+            gpasswd -d "$control_user" "$CONTROL_GROUP" >/dev/null 2>&1 \
+                || log_warn "未能回滚 ${control_user} 的 ${CONTROL_GROUP} 组成员关系"
+        done
+    fi
+    if [[ "$SERVICE_USER_CREATED" == true ]]; then
+        userdel "$SERVICE_USER" >/dev/null 2>&1 || log_warn "未能删除本次创建的服务账户 ${SERVICE_USER}"
+    fi
+    if [[ "$CONTROL_GROUP_CREATED" == true ]]; then
+        groupdel "$CONTROL_GROUP" >/dev/null 2>&1 || log_warn "未能删除本次创建的权限组 ${CONTROL_GROUP}"
+    fi
+    if [[ "$SERVICE_GROUP_CREATED" == true ]]; then
+        groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || log_warn "未能删除本次创建的服务组 ${SERVICE_GROUP}"
+    fi
+    if [[ "$CORE_DIR_WAS_PRESENT" != true ]]; then
+        rm -rf -- "$CORE_DIR"
+    fi
+    if [[ "$CONFIG_DIR_WAS_PRESENT" != true ]]; then
+        rm -rf -- "$CONFIG_DIR"
+    fi
+    if [[ "$STATE_DIR_WAS_PRESENT" != true ]]; then
+        rm -rf -- "$STATE_DIR"
+    fi
     log_warn "系统级安装已回滚"
 }
 
 write_proxy_env() {
-    local http_port
+    local http_port temp_file
     http_port="$(awk '/^port:/ {print $2; exit}' "$CONFIG_FILE")"
     [[ "$http_port" =~ ^[0-9]+$ ]] || return 1
-    cat > "$PROXY_ENV_FILE" <<EOF
+    temp_file="$(mktemp "$CONFIG_DIR/.proxy-env.XXXXXX")" || return 1
+    cat > "$temp_file" <<EOF
 # Managed by mihomo-install system mode. 不包含控制密钥，可供所有本机用户读取。
 export http_proxy="http://127.0.0.1:${http_port}"
 export https_proxy="http://127.0.0.1:${http_port}"
 export HTTP_PROXY="http://127.0.0.1:${http_port}"
 export HTTPS_PROXY="http://127.0.0.1:${http_port}"
 EOF
-    chmod 644 "$PROXY_ENV_FILE" || return 1
+    chmod 644 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    chown root:root "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv "$temp_file" "$PROXY_ENV_FILE" || { rm -f "$temp_file"; return 1; }
 }
 
 wait_for_service() {
@@ -517,9 +602,9 @@ wait_for_service() {
 }
 
 commit_installation() {
-    ensure_system_accounts || return 1
     snapshot_installation || return 1
     COMMIT_STARTED=true
+    ensure_system_accounts || return 1
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
 
     mkdir -p "$(dirname "$SERVICE_FILE")" "$(dirname "$COMMAND_FILE")" \
@@ -574,15 +659,7 @@ main() {
     require_root_linux
     require_commands
     require_project_files
-
-    if [[ -d "$CONFIG_DIR" && ! -f "$MANAGED_MARKER" ]]; then
-        log_error "$CONFIG_DIR 已存在但不是本项目管理的系统安装，为避免覆盖而终止"
-        return 1
-    fi
-    if [[ -f "$AUTO_PROFILE_FILE" ]] && ! grep -Fq 'mihomo-install system auto-enable' "$AUTO_PROFILE_FILE"; then
-        log_error "$AUTO_PROFILE_FILE 已存在但不是本项目管理的文件，为避免覆盖而终止"
-        return 1
-    fi
+    preflight_system_targets
 
     if [[ -f "$CONFIG_FILE" ]]; then
         read -r -p "检测到现有系统级 Mihomo，是否继续更新核心？[y/N]: " choice
@@ -606,7 +683,7 @@ main() {
     prompt_control_users
     prompt_auto_enable
 
-    STAGING_DIR="$(mktemp -d /var/tmp/mihomo-system-stage.XXXXXX)"
+    STAGING_DIR="$(mktemp -d /var/tmp/mihomo-system-stage.XXXXXX)" || return 1
     trap 'cleanup_temp "${STAGING_DIR:-}"; cleanup_temp "${BACKUP_DIR:-}"' EXIT
     prepare_staging || return 1
     if ! commit_installation; then

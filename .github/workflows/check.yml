@@ -1,0 +1,27 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run project checks
+        run: bash scripts/check.sh
+      - name: Validate Mihomo configuration
+        run: |
+          archive="$(find resources/bin -maxdepth 1 -name 'mihomo-linux-amd64-v2-*.gz' | sort -V | tail -n 1)"
+          test -n "$archive"
+          mkdir -p /tmp/mihomo-config-test
+          gzip -cd "$archive" > /tmp/mihomo-config-test/mihomo
+          chmod +x /tmp/mihomo-config-test/mihomo
+          cp config/config.yaml resources/Country.mmdb /tmp/mihomo-config-test/
+          /tmp/mihomo-config-test/mihomo -t -d /tmp/mihomo-config-test

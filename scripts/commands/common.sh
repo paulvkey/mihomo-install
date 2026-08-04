@@ -1,54 +1,51 @@
 #!/usr/bin/env bash
 
-# 由 clashon/clash_restart 共用的用户级 Mihomo 服务与端口管理函数。
+# 由 clash on/clash restart 共用的用户级 Mihomo 服务与端口管理函数。
 # 安装后位于 ~/.local/lib/mihomo-install/common.sh。
 
 MIHOMO_HOME_DIR="$HOME/mihomo"
 MIHOMO_CONFIG_FILE="$MIHOMO_HOME_DIR/config.yaml"
 MIHOMO_PROXY_ENV_FILE="$MIHOMO_HOME_DIR/proxy.env"
+MIHOMO_PROXY_AUTH_FILE="$MIHOMO_HOME_DIR/proxy-auth"
+MIHOMO_COMMAND_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ ! -r "$MIHOMO_COMMAND_LIB_DIR/ports.sh" || ! -r "$MIHOMO_COMMAND_LIB_DIR/user_auth.sh" ]]; then
+    echo "缺少 Mihomo 端口或认证命令库，请重新执行 install.sh。" >&2
+    return 1
+fi
+# shellcheck source=/dev/null
+source "$MIHOMO_COMMAND_LIB_DIR/ports.sh"
+# shellcheck source=/dev/null
+source "$MIHOMO_COMMAND_LIB_DIR/user_auth.sh"
 
 write_proxy_env() {
-    local http_port
+    local http_port temp_file
     http_port="$(awk '/^port:/ {print $2; exit}' "$MIHOMO_CONFIG_FILE")"
     if [[ ! "$http_port" =~ ^[0-9]+$ ]]; then
         echo "无法从 $MIHOMO_CONFIG_FILE 读取 HTTP 代理端口。" >&2
         return 1
     fi
 
-    umask 077
-    cat > "$MIHOMO_PROXY_ENV_FILE" <<ENV
-# Managed by mihomo-install. 此文件会由 clashon/clash_restart 自动更新。
-export http_proxy="http://127.0.0.1:${http_port}"
-export https_proxy="http://127.0.0.1:${http_port}"
-export HTTP_PROXY="http://127.0.0.1:${http_port}"
-export HTTPS_PROXY="http://127.0.0.1:${http_port}"
-ENV
-}
-
-port_in_use() {
-    local port="$1"
-    if command -v ss >/dev/null 2>&1; then
-        ss -ltnuH 2>/dev/null | awk -v port="$port" '$5 ~ ":" port "$" { found = 1 } END { exit !found }'
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -ltnu 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" { found = 1 } END { exit !found }'
-    else
+    if ! mihomo_read_proxy_auth "$MIHOMO_PROXY_AUTH_FILE"; then
+        echo "无法读取个人代理认证信息，请重新执行 install.sh。" >&2
         return 1
     fi
+
+    umask 077
+    temp_file="$(mktemp "$MIHOMO_HOME_DIR/.proxy-env.XXXXXX")" || return 1
+    cat > "$temp_file" <<ENV
+# Managed by mihomo-install. 此文件会由 clash on/clash restart 自动更新。
+export http_proxy="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+export https_proxy="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+export HTTP_PROXY="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+export HTTPS_PROXY="http://${MIHOMO_PROXY_USERNAME}:${MIHOMO_PROXY_PASSWORD}@127.0.0.1:${http_port}"
+ENV
+    chmod 600 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv "$temp_file" "$MIHOMO_PROXY_ENV_FILE" || { rm -f "$temp_file"; return 1; }
 }
 
 random_available_port() {
-    local candidate
-    local -a chosen=("$@")
-    for _ in {1..100}; do
-        candidate=$((20000 + RANDOM % 40000))
-        [[ " ${chosen[*]} " == *" $candidate "* ]] && continue
-        if ! port_in_use "$candidate"; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-    echo "无法在 20000-59999 范围内找到可用端口。" >&2
-    return 1
+    mihomo_random_available_port 20000 59999 "$@"
 }
 
 reassign_ports() {
