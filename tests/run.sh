@@ -15,6 +15,10 @@ fail() {
 [[ -f "$PROJECT_DIR/docs/USAGE.md" ]] || fail '缺少独立使用说明 docs/USAGE.md'
 grep -Fq '[完整使用说明](docs/USAGE.md)' "$PROJECT_DIR/README.md" \
     || fail 'README 未链接独立使用说明'
+grep -Fq 'VS Code Tunnel' "$PROJECT_DIR/docs/USAGE.md" \
+    || fail '使用说明缺少 VS Code Tunnel 独立 Shell 提示'
+grep -Fq '# Load mihomo-system command for interactive Bash shells' "$PROJECT_DIR/docs/USAGE.md" \
+    || fail '使用说明缺少 clashsys 的一次性 Bash 配置命令'
 
 # 随机端口必须覆盖指定范围，并排除本轮已选择的端口。
 # shellcheck source=../scripts/lib/ports.sh

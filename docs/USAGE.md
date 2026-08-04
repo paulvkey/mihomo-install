@@ -181,11 +181,45 @@ clashsys select
 
 ### 普通用户使用
 
-当前已经打开的 Bash 终端先加载命令：
+当前已经打开的 Bash 终端可以先加载命令：
 
 ```bash
 source /etc/profile.d/mihomo-system.sh
 ```
+
+`source` 只影响执行它的当前 Shell。网页终端、SSH 终端和 VS Code Tunnel 集成终端分别是独立进程；在网页终端执行过 `source`，不会把函数和代理变量同步到 VS Code 之后创建的终端。VS Code 集成终端通常还是交互式非登录 Shell，只读取当前用户的 `~/.bashrc`，不一定读取 `/etc/profile` 和 `/etc/profile.d/`。
+
+希望当前用户只配置一次，以后新开的 Bash、SSH 或 VS Code 终端都能直接使用 `clashsys`，可将下面整段复制执行一次。命令带有固定标记，重复执行不会重复写入：
+
+```bash
+grep -Fq '# Load mihomo-system command for interactive Bash shells' "$HOME/.bashrc" 2>/dev/null || \
+  printf '\n%s\n' \
+    '# Load mihomo-system command for interactive Bash shells' \
+    'if [[ $- == *i* && -r /etc/profile.d/mihomo-system.sh ]]; then' \
+    '    source /etc/profile.d/mihomo-system.sh' \
+    'fi' >> "$HOME/.bashrc"
+source "$HOME/.bashrc"
+```
+
+这段配置只负责自动加载 `clashsys` 命令，不会强制每个终端使用代理。以后新终端根据需要执行：
+
+```bash
+clashsys on
+```
+
+如果明确希望每个新 Bash 终端都自动启用系统共享代理，可以在完成上一步后，再将下面整段执行一次：
+
+```bash
+grep -Fq '# Auto-enable mihomo-system in interactive Bash shells' "$HOME/.bashrc" 2>/dev/null || \
+  printf '\n%s\n' \
+    '# Auto-enable mihomo-system in interactive Bash shells' \
+    'if [[ $- == *i* ]] && declare -F clashsys >/dev/null; then' \
+    '    clashsys on >/dev/null 2>&1 || true' \
+    'fi' >> "$HOME/.bashrc"
+source "$HOME/.bashrc"
+```
+
+自动启用会让新终端默认使用系统共享代理。如果该用户还安装了个人 Mihomo，不建议添加第二段；需要哪个代理时显式执行 `clash on` 或 `clashsys on` 更清晰。
 
 然后启用代理并验证：
 
@@ -194,7 +228,7 @@ clashsys on
 curl -I https://www.google.com
 ```
 
-用户重新登录后通常可直接执行 `clashsys on`，无需再次 `source`。如果管理员安装时开启了自动代理，并且该用户没有个人 Mihomo，则重新登录后无需执行 `clashsys on`。
+正常的登录式 Bash 通常会通过 `/etc/profile` 自动加载 `clashsys`；非登录终端是否加载取决于 Shell 启动方式。按上面的方式写入 `~/.bashrc` 后，新开的交互式 Bash 终端无需再次手动 `source`。如果管理员安装时开启了自动代理，并且该用户没有个人 Mihomo，则正常重新登录后也无需执行 `clashsys on`。
 
 所有用户均可执行：
 
