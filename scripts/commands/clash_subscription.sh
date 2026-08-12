@@ -112,7 +112,7 @@ cleanup_subscription_change() {
 main() {
     local prompt_status
 
-    (($# == 0)) || { echo "用法：clash subscription" >&2; return 1; }
+    (($# == 0)) || { echo "用法：clash sub" >&2; return 1; }
     if [[ ! -f "$CONFIG_FILE" || -L "$CONFIG_FILE" || ! -x "$CORE_FILE" ]]; then
         echo "个人 Mihomo 配置或核心不存在，请先执行 install.sh。" >&2
         return 1

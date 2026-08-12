@@ -42,14 +42,14 @@ Mihomo 系统共享模式帮助
 
 控制组命令（需要 root 或 mihomo-control 组权限）：
   select   测速并切换共享节点；会影响所有使用系统代理的用户
-  subscription  更换共享订阅、重启服务并重新选择节点
+  sub      更换共享订阅、重启服务并重新选择节点
   restart  重启系统共享 Mihomo 服务
 
 说明：
   1. on/off 只修改当前 shell 的 HTTP/HTTPS 代理变量，不会启动或停止共享服务。
   2. 如果安装时启用了自动代理，没有个人 Mihomo 的用户下次登录 Bash 后无需执行 on。
   3. 同时存在个人代理时，当前终端最后执行的 clash on 或 clashsys on 生效。
-  4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/subscription/restart。
+  4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/sub/restart。
   5. 安装成功后会执行首次节点测速；若订阅未加载节点，请修复后执行 clashsys select。
   6. 控制用户执行 clashsys on 时，当前共享节点可用则沿用；不可用时才进入选择。
 
@@ -57,7 +57,7 @@ Mihomo 系统共享模式帮助
   clashsys on
   clashsys status
   clashsys select
-  clashsys subscription
+  clashsys sub
   clashsys off
 EOF
 }
@@ -189,7 +189,7 @@ cleanup_subscription_change() {
 change_subscription() {
     local prompt_status
 
-    require_root_control subscription
+    require_root_control sub
     if [[ ! -f "$CONFIG_FILE" || -L "$CONFIG_FILE" || ! -x "$CORE_FILE" ]]; then
         echo "系统共享 Mihomo 配置或核心不存在，请先执行 install_sys.sh。" >&2
         return 1
@@ -479,8 +479,8 @@ main() {
         select)
             select_node "$@"
             ;;
-        subscription)
-            (($# == 0)) || { echo "用法：clashsys subscription" >&2; return 1; }
+        sub|subscription)
+            (($# == 0)) || { echo "用法：clashsys sub" >&2; return 1; }
             change_subscription
             ;;
         restart)

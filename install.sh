@@ -460,7 +460,7 @@ create_service_commands() {
             rm -f "$legacy_file" || return 1
         fi
     done
-    log_success "已创建统一命令：clash on/off/restart/status/select/subscription/auth/help"
+    log_success "已创建统一命令：clash on/off/restart/status/select/sub/auth/help"
 }
 
 configure_command_path() {
@@ -783,7 +783,7 @@ main() {
     echo
     log_success "安装完成：$MIHOMO_DIR \n"
     log_info "配置文件：$MIHOMO_DIR/config.yaml"
-    log_info "服务管理：clash on、clash off、clash select、clash subscription、clash restart、clash status、clash auth、clash help \n"
+    log_info "服务管理：clash on、clash off、clash select、clash sub、clash restart、clash status、clash auth、clash help \n"
     log_info "安装完成请执行 source ~/.bashrc && curl -I https://www.google.com 命令来加载并验证是否成功\n"
 }
 

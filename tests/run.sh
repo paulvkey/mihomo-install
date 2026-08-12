@@ -71,9 +71,9 @@ grep -Eq '^export http_proxy="http://mihomo_[0-9a-f]+:[0-9a-f]+@127\.0\.0\.1:234
 MIHOMO_COMMAND_LIB_DIR="$PROJECT_DIR/scripts/commands" bash "$PROJECT_DIR/scripts/commands/clash.sh" help \
     | grep -Fq 'auth' || fail 'clash help 缺少 auth 子命令'
 MIHOMO_COMMAND_LIB_DIR="$PROJECT_DIR/scripts/commands" bash "$PROJECT_DIR/scripts/commands/clash.sh" help \
-    | grep -Fq 'subscription' || fail 'clash help 缺少 subscription 子命令'
+    | grep -Eq '^[[:space:]]+sub[[:space:]]' || fail 'clash help 缺少 sub 子命令'
 bash "$PROJECT_DIR/system/commands/clashsys.sh" help \
-    | grep -Fq 'subscription' || fail 'clashsys help 缺少 subscription 子命令'
+    | grep -Eq '^[[:space:]]+sub[[:space:]]' || fail 'clashsys help 缺少 sub 子命令'
 grep -Fq -- "--noproxy '127.0.0.1,localhost,::1'" "$PROJECT_DIR/scripts/commands/clash_select.sh" \
     || fail '个人节点选择未绕过代理访问控制接口'
 grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/scripts/commands/clash_select.sh" \
@@ -96,7 +96,7 @@ grep -Fq 'display_label="★ ${display_label}"' "$PROJECT_DIR/system/commands/cl
     || fail '系统节点选择把 ANSI 控制符放入 select 标签，可能造成多列错位'
 grep -Fq '/usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/sudoers/mihomo-system" \
     || fail '系统 sudoers 未授权控制组执行启动时节点检查'
-grep -Fq '/usr/local/bin/clashsys subscription' "$PROJECT_DIR/system/sudoers/mihomo-system" \
+grep -Fq '/usr/local/bin/clashsys sub' "$PROJECT_DIR/system/sudoers/mihomo-system" \
     || fail '系统 sudoers 未授权控制组更换共享订阅'
 grep -Fq 'command /usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
     || fail 'clashsys on 未为控制用户触发当前节点检查'
