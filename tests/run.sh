@@ -98,8 +98,12 @@ grep -Fq '/usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/sudoers/mi
     || fail '系统 sudoers 未授权控制组执行启动时节点检查'
 grep -Fq '/usr/local/bin/clashsys sub' "$PROJECT_DIR/system/sudoers/mihomo-system" \
     || fail '系统 sudoers 未授权控制组更换共享订阅'
-grep -Fq 'command /usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
+grep -Fq 'command "$_mihomo_command_file" select --auto' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
     || fail 'clashsys on 未为控制用户触发当前节点检查'
+grep -Fq -- '--proxy "$http_proxy"' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
+    || fail 'clashsys on 未为普通用户通过共享代理检测节点可用性'
+grep -Fq '普通用户不会自动切换节点' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
+    || fail '普通用户节点检测失败时缺少不自动选择的提示'
 grep -Fq 'MIHOMO_SYSTEM_SKIP_NODE_CHECK=1 clashsys on' "$PROJECT_DIR/system/profile.d/zz-mihomo-system-auto.sh" \
     || fail '系统自动代理登录脚本可能触发隐藏的交互选择'
 grep -Fq 'select --auto' "$PROJECT_DIR/scripts/commands/clashon.sh" \
@@ -110,6 +114,81 @@ grep -Fq 'clash_subscription.sh' "$PROJECT_DIR/install.sh" \
     || fail '个人安装脚本未部署 subscription 命令组件'
 grep -Fq -- '- GEOIP,CN,DIRECT,no-resolve' "$PROJECT_DIR/config/config.yaml" \
     || fail '配置模板未使用 Country.mmdb'
+
+# 普通用户执行 clashsys on 只能经共享 HTTP 代理做可用性检测，不能调用全局节点选择。
+SYSTEM_ON_DIR="$TMP_ROOT/system-on"
+SYSTEM_ON_BIN="$SYSTEM_ON_DIR/bin"
+SYSTEM_ON_ENV="$SYSTEM_ON_DIR/proxy.env"
+SYSTEM_ON_COMMAND_LOG="$SYSTEM_ON_DIR/command.log"
+SYSTEM_ON_CURL_LOG="$SYSTEM_ON_DIR/curl.log"
+mkdir -p "$SYSTEM_ON_BIN"
+cat > "$SYSTEM_ON_ENV" <<'EOF'
+export http_proxy="http://127.0.0.1:12345"
+export https_proxy="http://127.0.0.1:12345"
+export HTTP_PROXY="http://127.0.0.1:12345"
+export HTTPS_PROXY="http://127.0.0.1:12345"
+EOF
+cat > "$SYSTEM_ON_BIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$SYSTEM_ON_BIN/id" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -u) printf '%s\n' 1000 ;;
+    -nG) printf '%s\n' 'users' ;;
+    *) exit 1 ;;
+esac
+EOF
+cat > "$SYSTEM_ON_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${MOCK_CURL_LOG:?}"
+[[ "${MOCK_CURL_FAIL:-}" != 1 ]]
+EOF
+cat > "$SYSTEM_ON_BIN/clashsys-command" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${MOCK_COMMAND_LOG:?}"
+exit 0
+EOF
+chmod +x "$SYSTEM_ON_BIN/systemctl" "$SYSTEM_ON_BIN/id" "$SYSTEM_ON_BIN/curl" \
+    "$SYSTEM_ON_BIN/clashsys-command"
+system_on_output="$(
+    PATH="$SYSTEM_ON_BIN:$PATH" MIHOMO_SYSTEM_ENV_FILE="$SYSTEM_ON_ENV" \
+    MIHOMO_SYSTEM_COMMAND_FILE="$SYSTEM_ON_BIN/clashsys-command" \
+    MIHOMO_SYSTEM_CHECK_URL='https://check.example/generate_204' \
+    MOCK_COMMAND_LOG="$SYSTEM_ON_COMMAND_LOG" MOCK_CURL_LOG="$SYSTEM_ON_CURL_LOG" \
+    PROJECT_UNDER_TEST="$PROJECT_DIR" bash -c '
+        source "$PROJECT_UNDER_TEST/system/profile.d/mihomo-system.sh"
+        clashsys on
+        [[ "$http_proxy" == "http://127.0.0.1:12345" ]]
+    ' 2>&1
+)" || fail '普通用户 clashsys on 可用节点检测执行失败'
+grep -Fq '当前共享代理节点可用。' <<< "$system_on_output" \
+    || fail '普通用户共享节点可用时缺少成功提示'
+grep -Fq -- '--proxy http://127.0.0.1:12345' "$SYSTEM_ON_CURL_LOG" \
+    || fail '普通用户节点检测没有显式使用共享 HTTP 代理'
+grep -Fq -- '--noproxy  --proxy' "$SYSTEM_ON_CURL_LOG" \
+    || fail '普通用户节点检测可能被 NO_PROXY 绕过共享代理'
+grep -Fq 'https://check.example/generate_204' "$SYSTEM_ON_CURL_LOG" \
+    || fail '普通用户节点检测没有访问测试地址'
+[[ ! -s "$SYSTEM_ON_COMMAND_LOG" ]] \
+    || fail '普通用户 clashsys on 错误调用了节点选择命令'
+
+: > "$SYSTEM_ON_CURL_LOG"
+system_on_failed_output="$(
+    PATH="$SYSTEM_ON_BIN:$PATH" MIHOMO_SYSTEM_ENV_FILE="$SYSTEM_ON_ENV" \
+    MIHOMO_SYSTEM_COMMAND_FILE="$SYSTEM_ON_BIN/clashsys-command" \
+    MOCK_COMMAND_LOG="$SYSTEM_ON_COMMAND_LOG" MOCK_CURL_LOG="$SYSTEM_ON_CURL_LOG" \
+    MOCK_CURL_FAIL=1 PROJECT_UNDER_TEST="$PROJECT_DIR" bash -c '
+        source "$PROJECT_UNDER_TEST/system/profile.d/mihomo-system.sh"
+        clashsys on
+        [[ "$http_proxy" == "http://127.0.0.1:12345" ]]
+    ' 2>&1
+)" || fail '普通用户 clashsys on 异常节点提醒流程执行失败'
+grep -Fq '普通用户不会自动切换节点' <<< "$system_on_failed_output" \
+    || fail '普通用户共享节点不可用时缺少提醒'
+[[ ! -s "$SYSTEM_ON_COMMAND_LOG" ]] \
+    || fail '普通用户检测失败后错误进入了节点选择'
 
 # 更换订阅只能修改 provider URL；健康检查地址及其他配置必须保持不变。
 SUBSCRIPTION_REWRITE_DIR="$TMP_ROOT/subscription-rewrite"
