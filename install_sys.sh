@@ -710,7 +710,7 @@ main() {
     log_info "停用当前终端代理：clashsys off"
     log_info "查看服务：clashsys status"
     if [[ -n "$CONTROL_USERS_ADDED" ]]; then
-        log_info "已将 ${CONTROL_USERS_ADDED} 加入 ${CONTROL_GROUP}；相关用户重新登录后可执行 clashsys select/restart"
+        log_info "已将 ${CONTROL_USERS_ADDED} 加入 ${CONTROL_GROUP}；相关用户重新登录后可执行 clashsys select/subscription/restart"
     else
         log_info "本次未新增控制用户；现有 ${CONTROL_GROUP} 成员保持不变"
     fi

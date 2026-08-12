@@ -11,6 +11,7 @@ LIB_SOURCE_DIR="$SCRIPT_DIR/scripts/lib"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 COUNTRY_FILE="$RESOURCE_DIR/Country.mmdb"
 SELECT_SCRIPT="$COMMAND_SOURCE_DIR/clash_select.sh"
+SUBSCRIPTION_SCRIPT="$COMMAND_SOURCE_DIR/clash_subscription.sh"
 AUTH_SCRIPT="$COMMAND_SOURCE_DIR/clash_auth.sh"
 COMMON_SCRIPT="$COMMAND_SOURCE_DIR/common.sh"
 CLASH_SCRIPT="$COMMAND_SOURCE_DIR/clash.sh"
@@ -69,7 +70,7 @@ require_commands() {
 
 require_project_files() {
     local source_file installed_component
-    for source_file in "$CONFIG_FILE" "$COUNTRY_FILE" "${COUNTRY_FILE}.sha256" "$PORTS_LIB" "$USER_AUTH_LIB" "$GITHUB_LIB" "$COMMON_SCRIPT" "$CLASH_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT" "$AUTH_SCRIPT"; do
+    for source_file in "$CONFIG_FILE" "$COUNTRY_FILE" "${COUNTRY_FILE}.sha256" "$PORTS_LIB" "$USER_AUTH_LIB" "$GITHUB_LIB" "$COMMON_SCRIPT" "$CLASH_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT" "$SUBSCRIPTION_SCRIPT" "$AUTH_SCRIPT"; do
         if [[ ! -f "$source_file" ]]; then
             log_error "项目文件缺失：$source_file"
             return 1
@@ -93,7 +94,7 @@ require_project_files() {
         log_error "$COMMAND_LIB_DIR 是符号链接，为避免覆盖非预期目录而终止"
         return 1
     fi
-    for installed_component in ports.sh user_auth.sh common.sh clashon.sh clashoff.sh clash_restart.sh clash_status.sh clash_select.sh clash_auth.sh; do
+    for installed_component in ports.sh user_auth.sh common.sh clashon.sh clashoff.sh clash_restart.sh clash_status.sh clash_select.sh clash_subscription.sh clash_auth.sh; do
         if [[ -L "$COMMAND_LIB_DIR/$installed_component" ]]; then
             log_error "$COMMAND_LIB_DIR/$installed_component 是符号链接，为避免覆盖非预期文件而终止"
             return 1
@@ -426,7 +427,7 @@ create_service_commands() {
     local source_file legacy_command legacy_file
     mkdir -p "$COMMAND_DIR" "$COMMAND_LIB_DIR" || return 1
 
-    for source_file in "$PORTS_LIB" "$USER_AUTH_LIB" "$COMMON_SCRIPT" "$CLASH_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT" "$AUTH_SCRIPT"; do
+    for source_file in "$PORTS_LIB" "$USER_AUTH_LIB" "$COMMON_SCRIPT" "$CLASH_SCRIPT" "$CLASHON_SCRIPT" "$CLASHOFF_SCRIPT" "$CLASH_RESTART_SCRIPT" "$CLASH_STATUS_SCRIPT" "$SELECT_SCRIPT" "$SUBSCRIPTION_SCRIPT" "$AUTH_SCRIPT"; do
         if [[ ! -f "$source_file" ]]; then
             log_error "未找到管理命令源文件：$source_file"
             return 1
@@ -441,6 +442,7 @@ create_service_commands() {
     cp "$CLASH_RESTART_SCRIPT" "$COMMAND_LIB_DIR/clash_restart.sh" || return 1
     cp "$CLASH_STATUS_SCRIPT" "$COMMAND_LIB_DIR/clash_status.sh" || return 1
     cp "$SELECT_SCRIPT" "$COMMAND_LIB_DIR/clash_select.sh" || return 1
+    cp "$SUBSCRIPTION_SCRIPT" "$COMMAND_LIB_DIR/clash_subscription.sh" || return 1
     cp "$AUTH_SCRIPT" "$COMMAND_LIB_DIR/clash_auth.sh" || return 1
     cp "$CLASH_SCRIPT" "$COMMAND_DIR/clash" || return 1
     printf '%s\n' '# Managed by mihomo-install' > "$COMMAND_LIB_DIR/.managed-by-mihomo-install" || return 1
@@ -448,7 +450,8 @@ create_service_commands() {
     chmod 755 "$COMMAND_DIR/clash" \
         "$COMMAND_LIB_DIR/clashon.sh" "$COMMAND_LIB_DIR/clashoff.sh" \
         "$COMMAND_LIB_DIR/clash_restart.sh" "$COMMAND_LIB_DIR/clash_status.sh" \
-        "$COMMAND_LIB_DIR/clash_select.sh" "$COMMAND_LIB_DIR/clash_auth.sh" || return 1
+        "$COMMAND_LIB_DIR/clash_select.sh" "$COMMAND_LIB_DIR/clash_subscription.sh" \
+        "$COMMAND_LIB_DIR/clash_auth.sh" || return 1
 
     # 重装新版时仅清理旧版本由本项目创建的独立命令，不删除用户自己的同名文件。
     for legacy_command in clashon clashoff clash_restart clash_status clash_select; do
@@ -457,7 +460,7 @@ create_service_commands() {
             rm -f "$legacy_file" || return 1
         fi
     done
-    log_success "已创建统一命令：clash on/off/restart/status/select/auth/help"
+    log_success "已创建统一命令：clash on/off/restart/status/select/subscription/auth/help"
 }
 
 configure_command_path() {
@@ -780,7 +783,7 @@ main() {
     echo
     log_success "安装完成：$MIHOMO_DIR \n"
     log_info "配置文件：$MIHOMO_DIR/config.yaml"
-    log_info "服务管理：clash on、clash off、clash select、clash restart、clash status、clash auth、clash help \n"
+    log_info "服务管理：clash on、clash off、clash select、clash subscription、clash restart、clash status、clash auth、clash help \n"
     log_info "安装完成请执行 source ~/.bashrc && curl -I https://www.google.com 命令来加载并验证是否成功\n"
 }
 

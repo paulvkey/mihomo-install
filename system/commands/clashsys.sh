@@ -7,11 +7,21 @@ export PATH
 
 SERVICE_NAME="mihomo-system.service"
 CONFIG_FILE="/etc/mihomo/config.yaml"
+CORE_FILE="/usr/local/lib/mihomo/mihomo"
+STATE_DIR="/var/lib/mihomo"
+PROVIDER_CACHE="$STATE_DIR/providers/subscription.yaml"
+SERVICE_GROUP="mihomo"
 CONTROL_GROUP="mihomo-control"
 GROUP_NAME="PROXY"
 DELAY_TEST_URL="https://www.gstatic.com/generate_204"
 DELAY_TIMEOUT_MS=5000
 DELAY_WARN_MS=1500
+
+SUBSCRIPTION_BACKUP_DIR=""
+SUBSCRIPTION_CANDIDATE=""
+SUBSCRIPTION_ROLLBACK_NEEDED=false
+SUBSCRIPTION_SERVICE_WAS_ACTIVE=false
+SUBSCRIPTION_CACHE_WAS_PRESENT=false
 
 usage() {
     cat <<'EOF'
@@ -32,13 +42,14 @@ Mihomo 系统共享模式帮助
 
 控制组命令（需要 root 或 mihomo-control 组权限）：
   select   测速并切换共享节点；会影响所有使用系统代理的用户
+  subscription  更换共享订阅、重启服务并重新选择节点
   restart  重启系统共享 Mihomo 服务
 
 说明：
   1. on/off 只修改当前 shell 的 HTTP/HTTPS 代理变量，不会启动或停止共享服务。
   2. 如果安装时启用了自动代理，没有个人 Mihomo 的用户下次登录 Bash 后无需执行 on。
   3. 同时存在个人代理时，当前终端最后执行的 clash on 或 clashsys on 生效。
-  4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/restart。
+  4. 新加入 mihomo-control 组后，需要重新登录才能执行 select/subscription/restart。
   5. 安装成功后会执行首次节点测速；若订阅未加载节点，请修复后执行 clashsys select。
   6. 控制用户执行 clashsys on 时，当前共享节点可用则沿用；不可用时才进入选择。
 
@@ -46,6 +57,7 @@ Mihomo 系统共享模式帮助
   clashsys on
   clashsys status
   clashsys select
+  clashsys subscription
   clashsys off
 EOF
 }
@@ -77,6 +89,168 @@ read_controller() {
     fi
     CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_PORT}"
     CURL_AUTH_ARGS=(-H "Authorization: Bearer ${CONTROLLER_SECRET}")
+}
+
+prompt_subscription_url() {
+    local value
+    while true; do
+        if ! read -r -p "请输入新的系统共享 Clash/Mihomo 订阅链接（输入 0 取消）: " value; then
+            echo "未读取到订阅链接，操作已取消。" >&2
+            return 2
+        fi
+        if [[ "$value" == "0" ]]; then
+            return 2
+        fi
+        if [[ "$value" =~ ^https?://[^[:space:]]+$ ]]; then
+            NEW_SUBSCRIPTION_URL="$value"
+            return 0
+        fi
+        echo "订阅链接必须以 http:// 或 https:// 开头，且不能包含空白字符。" >&2
+    done
+}
+
+# 只修改本项目 proxy-providers.subscription 下的 url，避免误改 health-check.url。
+write_subscription_candidate() {
+    local source_file="$1" target_file="$2" new_url="$3"
+    local line url_json in_subscription=false replaced=0
+
+    url_json="$(printf '%s' "$new_url" | jq -Rs .)" || return 1
+    : > "$target_file" || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "  subscription:" ]]; then
+            in_subscription=true
+        elif [[ "$in_subscription" == true && "$line" =~ ^[[:space:]]{2}[^[:space:]] ]]; then
+            in_subscription=false
+        fi
+
+        if [[ "$in_subscription" == true && "$line" =~ ^[[:space:]]{4}url: ]]; then
+            printf '    url: %s\n' "$url_json" >> "$target_file" || return 1
+            replaced=$((replaced + 1))
+        else
+            printf '%s\n' "$line" >> "$target_file" || return 1
+        fi
+    done < "$source_file"
+
+    if ((replaced != 1)); then
+        echo "无法唯一定位 proxy-providers.subscription.url，配置未修改。" >&2
+        return 1
+    fi
+}
+
+wait_for_subscription_service() {
+    local check stable_checks=0
+    for check in {1..10}; do
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            stable_checks=$((stable_checks + 1))
+            ((stable_checks >= 3)) && return 0
+        else
+            stable_checks=0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+restore_previous_subscription() {
+    set +e
+    echo "正在恢复原系统共享订阅配置和缓存..." >&2
+    systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if [[ -f "$SUBSCRIPTION_BACKUP_DIR/config.yaml" ]]; then
+        rm -f -- "$CONFIG_FILE"
+        cp -a "$SUBSCRIPTION_BACKUP_DIR/config.yaml" "$CONFIG_FILE"
+    fi
+    rm -f -- "$PROVIDER_CACHE"
+    if [[ "$SUBSCRIPTION_CACHE_WAS_PRESENT" == true ]] \
+        && [[ -e "$SUBSCRIPTION_BACKUP_DIR/subscription.yaml" || -L "$SUBSCRIPTION_BACKUP_DIR/subscription.yaml" ]]; then
+        mkdir -p "$(dirname "$PROVIDER_CACHE")"
+        cp -a "$SUBSCRIPTION_BACKUP_DIR/subscription.yaml" "$PROVIDER_CACHE"
+    fi
+    if [[ "$SUBSCRIPTION_SERVICE_WAS_ACTIVE" == true ]]; then
+        systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || \
+            echo "原系统配置已恢复，但服务未能重新启动；请执行 clashsys status 查看。" >&2
+    fi
+    echo "已恢复更换前的系统共享订阅配置。" >&2
+}
+
+cleanup_subscription_change() {
+    local status=$?
+    trap - EXIT
+    set +e
+    if [[ "$SUBSCRIPTION_ROLLBACK_NEEDED" == true ]]; then
+        restore_previous_subscription
+    fi
+    [[ -n "$SUBSCRIPTION_CANDIDATE" ]] && rm -f -- "$SUBSCRIPTION_CANDIDATE"
+    case "$SUBSCRIPTION_BACKUP_DIR" in
+        /var/tmp/mihomo-system-subscription.*) rm -rf -- "$SUBSCRIPTION_BACKUP_DIR" ;;
+    esac
+    exit "$status"
+}
+
+change_subscription() {
+    local prompt_status
+
+    require_root_control subscription
+    if [[ ! -f "$CONFIG_FILE" || -L "$CONFIG_FILE" || ! -x "$CORE_FILE" ]]; then
+        echo "系统共享 Mihomo 配置或核心不存在，请先执行 install_sys.sh。" >&2
+        return 1
+    fi
+    if ! command -v jq >/dev/null 2>&1 || ! command -v systemctl >/dev/null 2>&1; then
+        echo "更换系统共享订阅需要 jq 和 systemctl。" >&2
+        return 1
+    fi
+
+    if prompt_subscription_url; then
+        :
+    else
+        prompt_status=$?
+        if ((prompt_status == 2)); then
+            echo "已取消更换系统共享订阅。"
+            return 0
+        fi
+        return "$prompt_status"
+    fi
+
+    umask 077
+    SUBSCRIPTION_BACKUP_DIR="$(mktemp -d /var/tmp/mihomo-system-subscription.XXXXXX)" || return 1
+    trap cleanup_subscription_change EXIT
+    SUBSCRIPTION_CANDIDATE="$(mktemp "$CONFIG_FILE.subscription.XXXXXX")" || return 1
+
+    cp -a "$CONFIG_FILE" "$SUBSCRIPTION_BACKUP_DIR/config.yaml" || return 1
+    if [[ -e "$PROVIDER_CACHE" || -L "$PROVIDER_CACHE" ]]; then
+        cp -a "$PROVIDER_CACHE" "$SUBSCRIPTION_BACKUP_DIR/subscription.yaml" || return 1
+        SUBSCRIPTION_CACHE_WAS_PRESENT=true
+    fi
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        SUBSCRIPTION_SERVICE_WAS_ACTIVE=true
+    fi
+
+    write_subscription_candidate "$CONFIG_FILE" "$SUBSCRIPTION_CANDIDATE" "$NEW_SUBSCRIPTION_URL" || return 1
+    chown root:"$SERVICE_GROUP" "$SUBSCRIPTION_CANDIDATE" || return 1
+    chmod 640 "$SUBSCRIPTION_CANDIDATE" || return 1
+    if ! "$CORE_FILE" -t -d "$STATE_DIR" -f "$SUBSCRIPTION_CANDIDATE"; then
+        echo "新系统共享订阅配置未通过 Mihomo 配置自检，现有配置未修改。" >&2
+        return 1
+    fi
+
+    SUBSCRIPTION_ROLLBACK_NEEDED=true
+    mv -f "$SUBSCRIPTION_CANDIDATE" "$CONFIG_FILE" || return 1
+    SUBSCRIPTION_CANDIDATE=""
+    chown root:"$SERVICE_GROUP" "$CONFIG_FILE" || return 1
+    chmod 640 "$CONFIG_FILE" || return 1
+    rm -f -- "$PROVIDER_CACHE"
+
+    systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if ! wait_for_subscription_service; then
+        echo "系统共享 Mihomo 无法使用新订阅稳定启动，将自动回滚。" >&2
+        return 1
+    fi
+    if ! select_node; then
+        echo "新系统共享订阅没有成功加载可选节点，将自动回滚。" >&2
+        return 1
+    fi
+
+    SUBSCRIPTION_ROLLBACK_NEEDED=false
+    echo "系统共享订阅链接已更换，服务已重启；所有共享用户使用新的订阅节点。"
 }
 
 select_node() {
@@ -304,6 +478,10 @@ main() {
             ;;
         select)
             select_node "$@"
+            ;;
+        subscription)
+            (($# == 0)) || { echo "用法：clashsys subscription" >&2; return 1; }
+            change_subscription
             ;;
         restart)
             (($# == 0)) || { echo "用法：clashsys restart" >&2; return 1; }

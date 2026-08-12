@@ -78,7 +78,7 @@ fi
 if [[ -f "$COMMAND_LIB_DIR/.managed-by-mihomo-install" ]]; then
     rm -rf -- "$COMMAND_LIB_DIR"
 else
-    for command_component in ports.sh user_auth.sh common.sh clashon.sh clashoff.sh clash_restart.sh clash_status.sh clash_select.sh clash_auth.sh; do
+    for command_component in ports.sh user_auth.sh common.sh clashon.sh clashoff.sh clash_restart.sh clash_status.sh clash_select.sh clash_subscription.sh clash_auth.sh; do
         component_file="$COMMAND_LIB_DIR/$command_component"
         if [[ -f "$component_file" ]] && grep -Eq '(Managed by mihomo-install|Mihomo 安装脚本共用|个人模式 HTTP/SOCKS|用户级 Mihomo 服务与端口管理函数|交互选择 Mihomo 的 PROXY 代理组节点。)' "$component_file"; then
             rm -f "$component_file"

@@ -18,12 +18,14 @@ Mihomo 当前用户模式帮助
   restart  重启 Mihomo，保持原端口；端口冲突时最多重试 3 次
   status   查看 Mihomo 用户服务状态
   select   测速、标记异常节点并交互选择节点
+  subscription  更换订阅链接、重启服务并重新选择节点
   auth     显示手动配置代理时需要的用户名、密码和地址
   help     显示本帮助，也可以使用 -h 或 --help
 
 示例：
   clash on
   clash select
+  clash subscription
   clash status
   clash auth
   clash restart
@@ -65,6 +67,9 @@ main() {
             ;;
         select)
             run_action clash_select.sh "$@"
+            ;;
+        subscription)
+            run_action clash_subscription.sh "$@"
             ;;
         auth)
             run_action clash_auth.sh "$@"

@@ -1,2 +1,2 @@
-Cmnd_Alias MIHOMO_SYSTEM_CONTROL = /usr/local/bin/clashsys select, /usr/local/bin/clashsys select --auto, /usr/local/bin/clashsys restart
+Cmnd_Alias MIHOMO_SYSTEM_CONTROL = /usr/local/bin/clashsys select, /usr/local/bin/clashsys select --auto, /usr/local/bin/clashsys subscription, /usr/local/bin/clashsys restart
 %mihomo-control ALL=(root) NOPASSWD: MIHOMO_SYSTEM_CONTROL

@@ -70,6 +70,10 @@ grep -Eq '^export http_proxy="http://mihomo_[0-9a-f]+:[0-9a-f]+@127\.0\.0\.1:234
 # 命令入口和配置模板的关键安全项。
 MIHOMO_COMMAND_LIB_DIR="$PROJECT_DIR/scripts/commands" bash "$PROJECT_DIR/scripts/commands/clash.sh" help \
     | grep -Fq 'auth' || fail 'clash help 缺少 auth 子命令'
+MIHOMO_COMMAND_LIB_DIR="$PROJECT_DIR/scripts/commands" bash "$PROJECT_DIR/scripts/commands/clash.sh" help \
+    | grep -Fq 'subscription' || fail 'clash help 缺少 subscription 子命令'
+bash "$PROJECT_DIR/system/commands/clashsys.sh" help \
+    | grep -Fq 'subscription' || fail 'clashsys help 缺少 subscription 子命令'
 grep -Fq -- "--noproxy '127.0.0.1,localhost,::1'" "$PROJECT_DIR/scripts/commands/clash_select.sh" \
     || fail '个人节点选择未绕过代理访问控制接口'
 grep -Fq 'select(. != "DIRECT")' "$PROJECT_DIR/scripts/commands/clash_select.sh" \
@@ -92,6 +96,8 @@ grep -Fq 'display_label="★ ${display_label}"' "$PROJECT_DIR/system/commands/cl
     || fail '系统节点选择把 ANSI 控制符放入 select 标签，可能造成多列错位'
 grep -Fq '/usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/sudoers/mihomo-system" \
     || fail '系统 sudoers 未授权控制组执行启动时节点检查'
+grep -Fq '/usr/local/bin/clashsys subscription' "$PROJECT_DIR/system/sudoers/mihomo-system" \
+    || fail '系统 sudoers 未授权控制组更换共享订阅'
 grep -Fq 'command /usr/local/bin/clashsys select --auto' "$PROJECT_DIR/system/profile.d/mihomo-system.sh" \
     || fail 'clashsys on 未为控制用户触发当前节点检查'
 grep -Fq 'MIHOMO_SYSTEM_SKIP_NODE_CHECK=1 clashsys on' "$PROJECT_DIR/system/profile.d/zz-mihomo-system-auto.sh" \
@@ -100,8 +106,90 @@ grep -Fq 'select --auto' "$PROJECT_DIR/scripts/commands/clashon.sh" \
     || fail 'clash on 未启用当前节点自动检查'
 grep -Fq '"$COMMAND_FILE" select' "$PROJECT_DIR/install_sys.sh" \
     || fail '系统安装完成后未进入首次节点选择'
+grep -Fq 'clash_subscription.sh' "$PROJECT_DIR/install.sh" \
+    || fail '个人安装脚本未部署 subscription 命令组件'
 grep -Fq -- '- GEOIP,CN,DIRECT,no-resolve' "$PROJECT_DIR/config/config.yaml" \
     || fail '配置模板未使用 Country.mmdb'
+
+# 更换订阅只能修改 provider URL；健康检查地址及其他配置必须保持不变。
+SUBSCRIPTION_REWRITE_DIR="$TMP_ROOT/subscription-rewrite"
+mkdir -p "$SUBSCRIPTION_REWRITE_DIR"
+cp "$PROJECT_DIR/config/config.yaml" "$SUBSCRIPTION_REWRITE_DIR/source.yaml"
+PROJECT_UNDER_TEST="$PROJECT_DIR" REWRITE_DIR="$SUBSCRIPTION_REWRITE_DIR" bash -c '
+    source "$PROJECT_UNDER_TEST/scripts/commands/clash_subscription.sh"
+    write_subscription_candidate "$REWRITE_DIR/source.yaml" "$REWRITE_DIR/personal.yaml" \
+        "https://new.example/sub?token=a&name=b"
+' || fail '个人订阅地址重写失败'
+PROJECT_UNDER_TEST="$PROJECT_DIR" REWRITE_DIR="$SUBSCRIPTION_REWRITE_DIR" bash -c '
+    source "$PROJECT_UNDER_TEST/system/commands/clashsys.sh"
+    write_subscription_candidate "$REWRITE_DIR/source.yaml" "$REWRITE_DIR/system.yaml" \
+        "https://new.example/sub?token=a&name=b"
+' || fail '系统订阅地址重写失败'
+cmp -s "$SUBSCRIPTION_REWRITE_DIR/personal.yaml" "$SUBSCRIPTION_REWRITE_DIR/system.yaml" \
+    || fail '个人和系统订阅地址重写结果不一致'
+grep -Fq '    url: "https://new.example/sub?token=a&name=b"' "$SUBSCRIPTION_REWRITE_DIR/personal.yaml" \
+    || fail '新订阅地址没有安全写入 YAML'
+grep -Fq '      url: https://www.gstatic.com/generate_204' "$SUBSCRIPTION_REWRITE_DIR/personal.yaml" \
+    || fail '更换订阅时误改了健康检查地址'
+
+# 个人订阅更换成功时清理旧缓存；服务验证失败时恢复原配置和缓存。
+SUBSCRIPTION_HOME="$TMP_ROOT/subscription-home"
+SUBSCRIPTION_MOCK_BIN="$TMP_ROOT/subscription-bin"
+SUBSCRIPTION_STATE="$TMP_ROOT/subscription-restarted"
+mkdir -p "$SUBSCRIPTION_HOME/mihomo/providers" "$SUBSCRIPTION_HOME/.local/bin" "$SUBSCRIPTION_MOCK_BIN"
+cp "$PROJECT_DIR/config/config.yaml" "$SUBSCRIPTION_HOME/mihomo/config.yaml"
+printf '%s\n' 'old-provider-cache' > "$SUBSCRIPTION_HOME/mihomo/providers/subscription.yaml"
+cat > "$SUBSCRIPTION_HOME/mihomo/mihomo" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$SUBSCRIPTION_HOME/.local/bin/clash" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "select" ]]
+EOF
+cat > "$SUBSCRIPTION_MOCK_BIN/systemctl" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "--user is-active --quiet mihomo" ]]; then
+    if [[ "${MOCK_SUBSCRIPTION_FAIL:-}" == 1 && -e "${MOCK_STATE_FILE:?}" ]]; then
+        exit 1
+    fi
+    exit 0
+fi
+if [[ "$*" == "--user restart mihomo" ]]; then
+    : > "${MOCK_STATE_FILE:?}"
+fi
+exit 0
+EOF
+cat > "$SUBSCRIPTION_MOCK_BIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$SUBSCRIPTION_HOME/mihomo/mihomo" "$SUBSCRIPTION_HOME/.local/bin/clash" \
+    "$SUBSCRIPTION_MOCK_BIN/systemctl" "$SUBSCRIPTION_MOCK_BIN/sleep"
+subscription_output="$(
+    printf '%s\n' 'https://new.example/sub?token=success' | \
+        HOME="$SUBSCRIPTION_HOME" PATH="$SUBSCRIPTION_MOCK_BIN:$PATH" MOCK_STATE_FILE="$SUBSCRIPTION_STATE" \
+        bash "$PROJECT_DIR/scripts/commands/clash_subscription.sh" 2>&1
+)" || fail '个人订阅更换成功流程执行失败'
+grep -Fq '    url: "https://new.example/sub?token=success"' "$SUBSCRIPTION_HOME/mihomo/config.yaml" \
+    || fail '个人订阅更换后配置未生效'
+[[ ! -e "$SUBSCRIPTION_HOME/mihomo/providers/subscription.yaml" ]] \
+    || fail '个人订阅更换后未清理旧 provider 缓存'
+grep -Fq '订阅链接已更换，服务已重启。' <<< "$subscription_output" \
+    || fail '个人订阅更换成功时缺少完成提示'
+
+cp "$PROJECT_DIR/config/config.yaml" "$SUBSCRIPTION_HOME/mihomo/config.yaml"
+printf '%s\n' 'old-provider-cache' > "$SUBSCRIPTION_HOME/mihomo/providers/subscription.yaml"
+rm -f "$SUBSCRIPTION_STATE"
+if printf '%s\n' 'https://broken.example/sub' | \
+    HOME="$SUBSCRIPTION_HOME" PATH="$SUBSCRIPTION_MOCK_BIN:$PATH" MOCK_STATE_FILE="$SUBSCRIPTION_STATE" \
+    MOCK_SUBSCRIPTION_FAIL=1 bash "$PROJECT_DIR/scripts/commands/clash_subscription.sh" >/dev/null 2>&1; then
+    fail '服务验证失败时订阅更换仍返回成功'
+fi
+grep -Fq '    url: "https://example.com/your-subscription"' "$SUBSCRIPTION_HOME/mihomo/config.yaml" \
+    || fail '订阅更换失败时未恢复原配置'
+grep -Fqx 'old-provider-cache' "$SUBSCRIPTION_HOME/mihomo/providers/subscription.yaml" \
+    || fail '订阅更换失败时未恢复原 provider 缓存'
 
 # 节点测速只提供状态提示：超时节点必须继续出现在选择列表中，DIRECT 仍需隐藏。
 SELECT_HOME="$TMP_ROOT/select-home"

@@ -76,6 +76,7 @@ clash off      # 停止服务，并清理当前终端中的个人代理变量
 clash restart  # 重启服务，并更新当前终端的代理变量
 clash status   # 查看用户级 Mihomo 服务状态
 clash select   # 测速、标记异常节点并交互选择节点
+clash subscription # 更换订阅链接、重启服务并重新选择节点
 clash auth     # 显示手动配置应用所需的地址和用户名、密码
 clash help     # 查看帮助
 ```
@@ -102,7 +103,17 @@ CLASH_DELAY_TIMEOUT_MS=8000 CLASH_DELAY_WARN_MS=2000 clash select
 journalctl --user -u mihomo -n 80 --no-pager
 ```
 
-修复配置或订阅后重新执行 `clash select`。
+订阅地址本身失效时执行 `clash subscription` 更换；只是节点临时异常时，可稍后重新执行 `clash select`。
+
+### 更换个人订阅
+
+原订阅过期或异常时执行：
+
+```bash
+clash subscription
+```
+
+命令会交互输入新的订阅链接（输入内容正常回显），只修改 `proxy-providers.subscription.url`，不会改变个人代理端口、认证信息、控制密钥或其他规则。随后会清理旧订阅缓存、重启服务并进入节点测速和选择。新配置无法启动或没有加载到真实节点时，会自动恢复原配置和原订阅缓存。
 
 ### 应用代理配置
 
@@ -255,10 +266,21 @@ sudo usermod -aG mihomo-control <用户名>
 
 ```bash
 clashsys select   # 测速并切换共享节点，会影响所有共享用户
+clashsys subscription # 更换共享订阅并重新选节点，会影响所有共享用户
 clashsys restart  # 重启共享服务，保持原端口
 ```
 
-普通用户不能读取系统订阅和控制密钥，也不能停止或重启共享服务。
+普通用户不能读取或更换系统订阅和控制密钥，也不能停止或重启共享服务。
+
+### 更换系统共享订阅
+
+root 或 `mihomo-control` 控制用户执行：
+
+```bash
+clashsys subscription
+```
+
+命令会交互输入新的系统共享订阅链接，只替换订阅地址并保留现有共享端口、控制密钥和规则。更换成功后会重启服务并进入共享节点选择，结果立即影响所有共享用户；如果新配置无法启动或没有加载到真实节点，则自动恢复原配置和订阅缓存。普通用户不需要重新执行 `clashsys on`，已经打开的终端仍使用原来的共享代理地址。
 
 ### 与个人模式同时使用
 
